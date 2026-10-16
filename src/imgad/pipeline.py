@@ -195,10 +195,12 @@ class AnomalyDetectionPipeline(ThresholdMixin):
         device: Optional[str] = None,
         batch_size: Optional[int] = None,
         cache_dir: Optional[Union[str, os.PathLike]] = None,
+        token=None,
     ) -> "AnomalyDetectionPipeline":
         """Load a trained pipeline. ``device``/``batch_size``/``cache_dir`` override the saved values
         (e.g. a model trained on GPU can be used on CPU). Feature caching is off at inference unless
-        ``cache_dir`` is given.
+        ``cache_dir`` is given. ``token``: Hugging Face access token if the extractor is a gated/private
+        model (otherwise ``HF_TOKEN`` or the stored login are used; tokens are never saved in the file).
 
         Files saved by :class:`~imgad.anomalib_backend.AnomalibPipeline` are also accepted (an
         ``AnomalibPipeline`` is returned), so every loader in imgad works with both kinds."""
@@ -213,7 +215,7 @@ class AnomalyDetectionPipeline(ThresholdMixin):
         if batch_size is not None and "batch_size" in ext_cfg:
             ext_cfg["batch_size"] = batch_size
         obj = cls.__new__(cls)
-        obj.extractor = build_extractor(ext_cfg)
+        obj.extractor = build_extractor(ext_cfg, token=token)
         obj.detector = state["detector"]
         obj.preprocessing = state["preprocessing"]
         obj.preprocessing_steps = state.get("preprocessing_steps", [])
@@ -238,9 +240,10 @@ class AnomalyDetectionPipeline(ThresholdMixin):
         )
 
 
-def load_pipeline(path: Union[str, os.PathLike], device: Optional[str] = None, batch_size: Optional[int] = None):
+def load_pipeline(path: Union[str, os.PathLike], device: Optional[str] = None, batch_size: Optional[int] = None,
+                  token=None):
     """Load any saved imgad pipeline (feature + detector, or anomalib)."""
-    return AnomalyDetectionPipeline.load(path, device=device, batch_size=batch_size)
+    return AnomalyDetectionPipeline.load(path, device=device, batch_size=batch_size, token=token)
 
 
 def _just_below(scores: np.ndarray, t: float) -> float:

@@ -10,6 +10,8 @@
     imgad info --model bottle.joblib
     imgad benchmark --config configs/mvtec_benchmark.yaml --out results.csv --seeds 0 1 2 --bootstrap 1000 --stats
     imgad stats --results results.csv --metric auroc --cd-plot cd.png --out stats.md
+    imgad hf-login                                  # token for gated Hugging Face models
+    imgad hf-check facebook/dinov3-vitb16-pretrain-lvd1689m
 """
 
 from __future__ import annotations
@@ -51,6 +53,22 @@ def _write_csv(rows: List[Dict[str, Any]], path: str) -> None:
         w.writerows(rows)
 
 
+def _token(args):
+    """Token from --hf-token-file (never from a plain command-line value, which would leak into the shell
+    history and the process list). None -> HF_TOKEN or the stored login."""
+    path = getattr(args, "hf_token_file", None)
+    if not path:
+        return None
+    from imgad.hub import read_token_file
+
+    return read_token_file(path)
+
+
+def _add_token_arg(p) -> None:
+    p.add_argument("--hf-token-file", default=None, metavar="PATH",
+                   help="file with a Hugging Face token for gated/private models (default: HF_TOKEN or `imgad hf-login`)")
+
+
 def cmd_list(args):
     from imgad import list_anomalib_models, list_detectors, list_extractors
 
@@ -71,6 +89,9 @@ def cmd_fit(args):
     from imgad import AnomalyDetectionPipeline
 
     ext = {"type": args.extractor_type, "model_name": args.model, "batch_size": args.batch_size, **_kv(args.ext_param)}
+    token = _token(args)
+    if token is not None:
+        ext["token"] = token  # used to download the model; never saved
     if args.device:
         ext["device"] = args.device
     det = {"name": args.detector, **_kv(args.param)}
@@ -100,7 +121,8 @@ def _fit_anomalib(args, paths):
 def cmd_predict(args):
     from imgad import AnomalyPredictor
 
-    pred = AnomalyPredictor.load(args.model, device=args.device, threshold=args.threshold, batch_size=args.batch_size)
+    pred = AnomalyPredictor.load(args.model, device=args.device, threshold=args.threshold, batch_size=args.batch_size,
+                                 token=_token(args))
     if args.maps_dir and not pred.supports_maps:
         raise SystemExit("--maps-dir needs a model with anomaly maps (trained with --anomalib)")
     if args.maps_dir:  # stream in chunks: maps at full resolution are large
@@ -130,7 +152,7 @@ def cmd_calibrate(args):
     from imgad import load_pipeline
     from imgad.data import list_images
 
-    pipe = load_pipeline(args.model, device=args.device, batch_size=args.batch_size)
+    pipe = load_pipeline(args.model, device=args.device, batch_size=args.batch_size, token=_token(args))
     normal = [p for d in args.normal for p in list_images(d)]
     anomalous = [p for d in (args.anomalous or []) for p in list_images(d)]
     paths, labels = normal + anomalous, [0] * len(normal) + [1] * len(anomalous)
@@ -192,6 +214,7 @@ def cmd_benchmark(args):
         ci_alpha=cfg.get("ci_alpha", 0.05),
         keep_scores=bool(args.scores_out or args.report),
         verbose=not args.quiet,
+        token=_token(args),
     )
     if args.out:
         _write_csv(rows, args.out)
@@ -297,6 +320,46 @@ def cmd_stats(args):
     _print_stats(rows, args.metric, args.alpha, args.cd_plot, args.out, args.baseline)
 
 
+def cmd_hf_login(args):
+    from imgad.hub import login
+
+    token = _token(args)
+    user = login(token)
+    print(f"Logged in to Hugging Face as {user} (token stored like `hf auth login`).")
+
+
+def cmd_hf_logout(args):
+    from imgad.hub import logout
+
+    logout()
+    print("Logged out from Hugging Face (stored token removed).")
+
+
+def cmd_hf_check(args):
+    from imgad.hub import check_models, token_source, whoami
+
+    names = list(args.models)
+    if args.config:
+        from imgad.evaluation import _hub_name
+
+        with open(args.config) as f:
+            cfg = yaml.safe_load(f)
+        names += [n for n in map(_hub_name, cfg.get("extractors") or []) if n]
+    if not names:
+        raise SystemExit("hf-check: give model ids and/or --config")
+    token = _token(args)
+    user = whoami(token)
+    print(f"Token: {token_source(token)}" + (f" (user {user})" if user else ""))
+    statuses = check_models(names, token)
+    if not statuses:
+        print("No Hugging Face Hub models to check.")
+        return
+    for st in statuses:
+        print(f"[{'ok' if st.ok else 'NO'}] {st.explain()}")
+    if not all(st.ok for st in statuses):
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="imgad", description="Image anomaly detection with foundation-model features")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -318,6 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--batch-size", type=int, default=32)
     f.add_argument("--device", default=None)
     f.add_argument("--cache-dir", default=None)
+    _add_token_arg(f)
     f.set_defaults(func=cmd_fit)
 
     for name in ("predict", "score"):  # "score" kept as alias
@@ -333,6 +397,7 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--batch-size", type=int, default=None)
         s.add_argument("--device", default=None)
         s.add_argument("-q", "--quiet", action="store_true")
+        _add_token_arg(s)
         s.set_defaults(func=cmd_predict)
 
     c = sub.add_parser("calibrate", help="Re-tune the decision threshold of a trained model on labelled validation images")
@@ -345,6 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--out", default=None, help="output .joblib (default: overwrite --model)")
     c.add_argument("--batch-size", type=int, default=None)
     c.add_argument("--device", default=None)
+    _add_token_arg(c)
     c.set_defaults(func=cmd_calibrate)
 
     i = sub.add_parser("info", help="Show the configuration and metadata of a trained model")
@@ -365,6 +431,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write a markdown report (data analysis, methods, results with figures, discussion) to DIR")
     b.add_argument("--report-title", default=None)
     _add_progress_args(b)
+    _add_token_arg(b)
     b.set_defaults(func=cmd_benchmark)
 
     rp = sub.add_parser("report", help="Build the markdown report from a benchmark --scores-out file")
@@ -386,6 +453,15 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--cd-plot", default=None, help="save a critical-difference diagram (needs matplotlib)")
     st.add_argument("--out", default=None, help="write the report as markdown")
     st.set_defaults(func=cmd_stats)
+    hl = sub.add_parser("hf-login", help="Store a Hugging Face token for gated/private models (input hidden)")
+    _add_token_arg(hl)
+    hl.set_defaults(func=cmd_hf_login)
+    sub.add_parser("hf-logout", help="Remove the stored Hugging Face token").set_defaults(func=cmd_hf_logout)
+    hc = sub.add_parser("hf-check", help="Check access to Hugging Face models (gated, private, token...)")
+    hc.add_argument("models", nargs="*", help="model ids, e.g. facebook/dinov3-vitb16-pretrain-lvd1689m")
+    hc.add_argument("--config", default=None, help="benchmark YAML: check every Hub extractor in it")
+    _add_token_arg(hc)
+    hc.set_defaults(func=cmd_hf_check)
     return ap
 
 
@@ -398,7 +474,13 @@ def main(argv=None):
         args.inputs = list(args.inputs) + list(args.images)
         if not args.inputs:
             ap.error("predict: give at least one image or folder")
-    args.func(args)
+    from imgad.hub import GatedModelError
+
+    try:
+        args.func(args)
+    except GatedModelError as e:  # access problems: print the instructions, not a traceback
+        print(f"error: {e}", file=sys.stderr)
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":  # pragma: no cover

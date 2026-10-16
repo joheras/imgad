@@ -6,7 +6,7 @@ import yaml
 
 from imgad import BaseDetector, benchmark, data, register_detector
 from imgad.cli import main
-from imgad.progress import BenchmarkProgress, fmt_duration, setup_logging
+from imgad.progress import BenchmarkProgress, fmt_duration
 
 
 def test_fmt_duration():
@@ -89,4 +89,3 @@ def test_cli_quiet_and_log_file(two_categories, tmp_path, capsys):
     assert "Benchmark plan" in err and "[4/4 100%]" in err and "DEBUG" not in err
     text = log.read_text()
     assert "INFO    imgad: Benchmark plan" in text and "DEBUG   imgad: fit mvtec/cat" in text
-    setup_logging(logging.WARNING)   # do not leak console handlers into other tests

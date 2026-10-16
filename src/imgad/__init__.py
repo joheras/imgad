@@ -40,9 +40,10 @@ from .pipeline import AnomalyDetectionPipeline, load_pipeline
 from .anomalib_backend import AnomalibPipeline, list_anomalib_models
 from .inference import AnomalyPredictor, Prediction
 from .evaluation import evaluate_maps, evaluate_scores, benchmark
-from . import data, stats
+from . import data, hub, stats
+from .hub import GatedModelError
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "FeatureExtractor",
@@ -66,5 +67,7 @@ __all__ = [
     "evaluate_maps",
     "benchmark",
     "data",
+    "hub",
+    "GatedModelError",
     "stats",
 ]

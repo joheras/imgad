@@ -1,9 +1,24 @@
+import logging
+
 import numpy as np
 import pytest
 from PIL import Image
 
 from imgad import FeatureExtractor
 from imgad.features import register_extractor
+
+
+@pytest.fixture(autouse=True)
+def _reset_imgad_logging():
+    """CLI commands configure the ``imgad`` logger (handlers, propagate=False); undo it after each test so
+    that ``caplog`` keeps working in the tests that follow."""
+    yield
+    log = logging.getLogger("imgad")
+    for h in list(log.handlers):
+        log.removeHandler(h)
+        h.close()
+    log.propagate = True
+    log.setLevel(logging.NOTSET)
 
 
 @register_extractor("stats")
