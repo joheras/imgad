@@ -121,10 +121,10 @@ def test_cli_benchmark_and_stats(two_categories, tmp_path, capsys):
     main(["benchmark", "--config", str(cfg), "--out", str(csv_path), "--bootstrap", "30",
           "--scores-out", str(scores), "--stats"])
     out = capsys.readouterr().out
-    assert "Repeticiones" in out and "Friedman" in out and "DeLong" in out
+    assert "Repetitions" in out and "Friedman" in out and "DeLong" in out
     rows = stats.load_results(str(csv_path))
     assert len(rows) == 12 and "scores" not in rows[0] and isinstance(rows[0]["auroc_ci_low"], float)
-    report = tmp_path / "informe.md"
+    report = tmp_path / "stats_report.md"
     main(["stats", "--results", str(csv_path), "--metric", "aupr", "--out", str(report)])
     assert "aupr" in report.read_text()
     main(["stats", "--scores", str(scores), "--baseline", rows[0]["config"]])

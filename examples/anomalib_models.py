@@ -1,7 +1,7 @@
 """Anomalib models (PatchCore, PaDiM, ...) vs. foundation-model features, with pixel-level maps.
 
-    pip install -e ".[anomalib]"
-    python examples/anomalib_models.py --root /ruta/mvtec_anomaly_detection --category bottle
+    pip install "imgad[anomalib]"
+    python examples/anomalib_models.py --root /path/to/mvtec_anomaly_detection --category bottle
 """
 
 import argparse

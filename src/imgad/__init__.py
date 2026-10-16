@@ -8,14 +8,14 @@ Typical usage::
     pipe = AnomalyDetectionPipeline(extractor, build_detector("knn", k=1), preprocessing=["l2"])
     pipe.fit(normal_image_paths)
     scores = pipe.score(test_image_paths)
-    pipe.save("modelo.joblib")
+    pipe.save("model.joblib")
 
     # inference later / elsewhere
     from imgad import AnomalyPredictor
-    predictor = AnomalyPredictor.load("modelo.joblib")
-    predictor.predict_one("nueva.png")   # -> Prediction(score, is_anomaly, normal_percentile, ...)
+    predictor = AnomalyPredictor.load("model.joblib")
+    predictor.predict_one("new.png")   # -> Prediction(score, is_anomaly, normal_percentile, ...)
 
-    # end-to-end anomalib models with pixel-level anomaly maps (pip install -e ".[anomalib]")
+    # end-to-end anomalib models with pixel-level anomaly maps (pip install "imgad[anomalib]")
     from imgad import AnomalibPipeline
     pipe = AnomalibPipeline("patchcore", backbone="wide_resnet50_2").fit(normal_image_paths)
     scores, maps = pipe.score_and_maps(test_image_paths)

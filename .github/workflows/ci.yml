@@ -40,7 +40,7 @@ jobs:
         run: |
           extras="dev"
           if [ "${{ matrix.anomalib }}" = "true" ]; then extras="dev,anomalib"; fi
-          pip install -e ".[${extras}]" matplotlib
+          pip install -e ".[${extras}]"
 
       - name: Show versions
         run: python -c "import torch, transformers, sklearn; print(torch.__version__, transformers.__version__, sklearn.__version__)"

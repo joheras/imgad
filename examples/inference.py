@@ -1,11 +1,11 @@
 """Inference with an already-trained model.
 
-    # 1) entrenar y guardar (una vez)
+    # 1) train and save (once)
     imgad fit --model openai/clip-vit-base-patch16 --detector knn -p k=1 \
-              --train /ruta/mvtec/bottle/train/good --out bottle.joblib
+              --train /path/to/mvtec/bottle/train/good --out bottle.joblib
 
-    # 2) inferencia
-    python examples/inference.py --model bottle.joblib /ruta/imagenes_nuevas
+    # 2) inference
+    python examples/inference.py --model bottle.joblib /path/to/new_images
 """
 
 import argparse
@@ -45,4 +45,4 @@ predictor.save_results(results, "predictions.csv")
 # Single image (path, PIL.Image or numpy array):
 #   r = predictor.predict_one("img.png");  r.is_anomaly, r.score, r.normal_percentile
 # Huge folders with constant memory:
-#   for r in predictor.predict_iter("/ruta/enorme", chunk_size=256): ...
+#   for r in predictor.predict_iter("/path/to/huge_folder", chunk_size=256): ...

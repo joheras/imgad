@@ -1,21 +1,21 @@
 # imgad benchmark --config configs/mvtec_benchmark.yaml --out results/mvtec.csv
 #
-# Rejilla: extractores x preprocesado x detectores x categorías.
-# Las features se extraen una vez por (extractor, categoría) y se cachean en disco.
+# Grid: extractors x preprocessing x detectors x categories.
+# Features are extracted once per (extractor, category) and cached on disk.
 
 data:
   type: mvtec                 # mvtec | folders | one_vs_rest
-  root: /ruta/a/mvtec_anomaly_detection
+  root: /path/to/mvtec_anomaly_detection
   categories: [bottle, cable, capsule, carpet, grid, hazelnut, leather, metal_nut,
                pill, screw, tile, toothbrush, transistor, wood, zipper]
-  # categories: null          # -> todas las que encuentre
+  # categories: null          # -> every category found
 
 cache_dir: .feature_cache
 
-# Repeticiones e incertidumbre (ver "Análisis estadístico" en el README)
-seeds: [0, 1, 2, 3, 4]        # una fila por semilla y configuración
-train_subsample: 0.8          # por semilla, 80% de las normales de entrenamiento (sin esto kNN/Mahalanobis no varían)
-bootstrap: 1000               # IC 95% de AUROC/AUPR remuestreando el test (0 = desactivado)
+# Repetitions and uncertainty (see "Statistical analysis" in the README)
+seeds: [0, 1, 2, 3, 4]        # one row per seed and configuration
+train_subsample: 0.8          # per seed, 80% of the normal training images (without it kNN/Mahalanobis do not vary)
+bootstrap: 1000               # 95% CI of AUROC/AUPR by resampling the test set (0 = off)
 ci_alpha: 0.05
 
 extractors:
@@ -23,9 +23,9 @@ extractors:
   - {type: hf, model_name: openai/clip-vit-large-patch14}
   - {type: hf, model_name: google/siglip-base-patch16-224}
   - {type: hf, model_name: facebook/dinov2-base, pooling: cls+mean}
-  # Capas intermedias (suelen funcionar mejor para defectos locales):
+  # Intermediate layers (often better for local defects):
   - {type: hf, model_name: openai/clip-vit-base-patch16, pooling: mean, layer: [6, 9, 12]}
-  # Checkpoints en formato open_clip (pip install open_clip_torch):
+  # Checkpoints in open_clip format (pip install open_clip_torch):
   # - {type: open_clip, model_name: "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K"}
 
 preprocessing:
@@ -46,10 +46,10 @@ detectors:
   - {name: ensemble, members: [{name: knn, k: 1}, mahalanobis], normalization: zscore}
   # - {name: pyod, model: ECOD}   # pip install pyod
 
-# Modelos de anomalib (pip install -e ".[anomalib]"): se entrenan por categoría y, si el dataset
-# tiene máscaras (MVTec: ground_truth/), se añaden pixel-AUROC, AUPR, F1-max y AUPRO.
+# Anomalib models (pip install "imgad[anomalib]"): trained per category and, if the dataset
+# has masks (MVTec: ground_truth/), pixel-AUROC, AUPR, F1-max and AUPRO are added.
 anomalib:
   - {name: patchcore, backbone: wide_resnet50_2, layers: [layer2, layer3], coreset_sampling_ratio: 0.1}
   - {name: padim, backbone: resnet18}
-  # - {name: efficient_ad, max_epochs: 70}        # descarga imagenette para el entrenamiento
+  # - {name: efficient_ad, max_epochs: 70}        # downloads imagenette for training
   # - {name: fastflow, backbone: resnet18, max_epochs: 50}
