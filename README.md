@@ -215,6 +215,36 @@ grid, extracting features once per (extractor, dataset), plus each Anomalib mode
 pixel metrics when masks are available). In YAML, use the `anomalib:` key (see
 `configs/mvtec_benchmark.yaml`).
 
+### Progress while the benchmark runs
+
+The benchmark reports what it is doing at every moment: the plan (datasets and number of runs), each
+phase (loading a model, extracting features with the number of cached images, training an Anomalib
+model, calibrating its thresholds, scoring the test set, building the report) and one line per
+finished run with a global counter, its metrics, the elapsed time and an ETA:
+
+```
+15:19:27 Benchmark plan: 2 dataset(s), 2 seed(s), 36 runs in total
+15:19:27   feature pipelines: 2 extractor(s) × 1 preprocessing(s) × 4 detector(s) × 2 dataset(s) × 2 seed(s) = 32 runs
+15:19:27 Extracting features [extractor 1/2, dataset 1/2]: clip-vit-base-patch16 on mvtec/bottle (292 images, 150 cached)...
+15:19:31 [ 2/36   6%] mvtec/bottle · seed 0 · ... | l2 | mahalanobis: AUROC=0.9937 [0.980, 1.000] AUPR=0.9981 (0.04s) · elapsed 4s, ETA ~1m12s
+15:19:36   training patchcore on 167 normal images (device cuda)...
+```
+
+The ETA is computed per kind of work (model loading, feature extraction, detector runs, Anomalib runs),
+so a slow extraction does not distort the estimate for the cheap detector runs; kinds not timed yet
+are flagged. If a step fails, the log says which one (`FAILED: fit mvtec/screw · seed 2 · ...`).
+
+| Option | Console output |
+|---|---|
+| (default) | plan, phases and one line per run (INFO) |
+| `-v`, `--verbose` | every step with its duration: preprocessing, fit, score, cache hits, figures (DEBUG) |
+| `-q`, `--quiet` | warnings and errors only, no progress bars |
+| `--log-file run.log` | additionally writes the full DEBUG log with timestamps to a file |
+
+From Python, messages go to the standard `logging` module under the `imgad` logger:
+`benchmark(..., verbose=True)` prints them when logging is not configured, and
+`imgad.progress.setup_logging(logging.DEBUG, log_file="run.log")` selects the level and adds a file.
+
 ## Benchmark reports
 
 `imgad benchmark --report DIR` writes a markdown report with figures:
@@ -319,7 +349,7 @@ imgad predict --model bottle.joblib folder/ --only-anomalies --threshold 0.02 --
 imgad calibrate --model bottle.joblib --normal val/good --anomalous val/defects --method f1 --out bottle_cal.joblib
 imgad info --model bottle_cal.joblib         # configuration, threshold and metadata
 
-imgad benchmark --config configs/mvtec_benchmark.yaml --out results.csv --report report/
+imgad benchmark --config configs/mvtec_benchmark.yaml --out results.csv --report report/ --log-file run.log
 
 # Anomalib models: -p sets the model kwargs; predict saves heatmaps and masks
 imgad fit --anomalib patchcore -p backbone=wide_resnet50_2 "layers=[layer2,layer3]" \
@@ -353,7 +383,8 @@ src/imgad/
   features/      base.py (interface, registry, cache) · huggingface.py · open_clip.py
   detectors/     base.py (interface, registry, calibration) · classical.py
   anomalib_backend.py (AnomalibPipeline) · maps.py (masks, heatmaps)
-  preprocessing.py · pipeline.py · inference.py · data.py · evaluation.py · stats.py · report.py · cli.py
+  preprocessing.py · pipeline.py · inference.py · data.py · evaluation.py · stats.py · report.py
+  progress.py (logging, ETA) · cli.py
 configs/         example benchmark YAML files
 examples/        quickstart.py · inference.py · compare_models.py · extending.py · anomalib_models.py
 benchmarks/      example benchmark results

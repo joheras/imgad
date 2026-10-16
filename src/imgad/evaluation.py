@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
@@ -11,6 +12,7 @@ from sklearn.metrics import average_precision_score, f1_score, precision_recall_
 from .detectors import BaseDetector, build_detector
 from .features import FeatureExtractor, build_extractor
 from .preprocessing import build_preprocessing
+from .progress import BenchmarkProgress, ensure_console, fmt_duration, logger, step
 
 
 def evaluate_scores(y_true, scores, y_pred: Optional[np.ndarray] = None) -> Dict[str, float]:
@@ -124,6 +126,9 @@ def benchmark(
         every seed; with it, the spread over seeds measures sensitivity to the training set.
       * ``bootstrap``: if > 0, adds ``<metric>_ci_low/high`` for AUROC and AUPR from that many
         stratified bootstrap resamples of the test set (``ci_alpha`` = 0.05 -> 95% CI).
+      * Progress (plan, current phase, one line per finished run with counter, elapsed time and ETA)
+        is logged under the ``imgad`` logger; ``verbose=True`` shows it on the console unless logging is
+        already configured (see :func:`imgad.progress.setup_logging`) and enables progress bars.
       * ``keep_scores``: store per-image ``scores`` and ``labels`` in each row (needed for paired tests
         such as :func:`imgad.stats.delong_vs_baseline`).
 
@@ -132,28 +137,52 @@ def benchmark(
     """
     import copy
 
+    ensure_console(verbose)
     rows: List[Dict[str, Any]] = []
+    extractors = list(extractors)
+    anomalib_models = list(anomalib_models)
     datasets = list(datasets)
     detectors = list(detectors)
     preprocessings = list(preprocessings)
     seeds = list(seeds) or [0]
     opts = dict(bootstrap=bootstrap, ci_alpha=ci_alpha, keep_scores=keep_scores)
-    for ext in extractors:
-        ext = ext if isinstance(ext, FeatureExtractor) else build_extractor(ext)
+    n_feat = len(extractors) * len(datasets) * len(seeds) * len(preprocessings) * len(detectors)
+    n_anom = len(anomalib_models) * len(datasets) * len(seeds)
+    prog = BenchmarkProgress({"load": len(extractors), "extract": len(extractors) * len(datasets),
+                              "detector": n_feat, "anomalib": n_anom})
+    _log_plan(logger, extractors, preprocessings, detectors, anomalib_models, datasets, seeds, n_feat, n_anom,
+              train_subsample, bootstrap)
+
+    for i_ext, ext in enumerate(extractors, 1):
+        with step(f"Extractor {i_ext}/{len(extractors)}: building {_spec_name(ext)}", logging.INFO) as st:
+            ext = ext if isinstance(ext, FeatureExtractor) else build_extractor(ext)
+            if hasattr(ext, "_load"):
+                logger.info(f"  loading model weights ({getattr(ext, 'model_name', '')} on {getattr(ext, 'device', '?')})")
+                ext._load()
+        prog.add("load", st.seconds)
         ext_name = getattr(ext, "model_name", type(ext).__name__)
         if getattr(ext, "pooling", None) not in (None, "auto"):
             ext_name += f"[{ext.pooling}" + (f"@{ext.layer}" if getattr(ext, "layer", None) is not None else "") + "]"
-        for ds in datasets:
-            t0 = time.time()
-            Xtr_all = ext.extract(ds.train_paths, cache_dir=cache_dir, show_progress=verbose)
-            Xte = ext.extract(ds.test_paths, cache_dir=cache_dir, show_progress=verbose)
-            t_feat = time.time() - t0
+        for i_ds, ds in enumerate(datasets, 1):
+            n_img = len(ds.train_paths) + len(ds.test_paths)
+            cached = ext.cached_count(list(ds.train_paths) + list(ds.test_paths), cache_dir)
+            msg = (f"Extracting features [extractor {i_ext}/{len(extractors)}, dataset {i_ds}/{len(datasets)}]: "
+                   f"{ext_name} on {ds.name} ({n_img} images" + (f", {cached} cached" if cached else "") + ")")
+            with step(msg, logging.INFO) as st:
+                Xtr_all = ext.extract(ds.train_paths, cache_dir=cache_dir, show_progress=verbose)
+                Xte = ext.extract(ds.test_paths, cache_dir=cache_dir, show_progress=verbose)
+            t_feat = st.seconds
+            prog.add("extract", t_feat)
+            logger.info(f"  features: {Xtr_all.shape[1]}-d, {fmt_duration(t_feat)} · {prog.timing()}")
             for seed in seeds:
-                Xtr = Xtr_all[_subsample(len(Xtr_all), train_subsample, seed)]
+                idx = _subsample(len(Xtr_all), train_subsample, seed)
+                Xtr = Xtr_all[idx]
                 for pp in preprocessings:
-                    prep = build_preprocessing(pp)
-                    Ztr = prep.fit_transform(Xtr) if prep is not None else Xtr
-                    Zte = prep.transform(Xte) if prep is not None else Xte
+                    pp_name = "+".join(map(str, pp)) if pp else "-"
+                    with step(f"preprocessing {pp_name} (seed {seed}, {len(Xtr)} training images)"):
+                        prep = build_preprocessing(pp)
+                        Ztr = prep.fit_transform(Xtr) if prep is not None else Xtr
+                        Zte = prep.transform(Xte) if prep is not None else Xte
                     for det_spec in detectors:
                         det = (
                             copy.deepcopy(det_spec)
@@ -161,30 +190,89 @@ def benchmark(
                             else build_detector(det_spec)
                         )
                         _seed_detector(det, det_spec, seed)
-                        t1 = time.time()
-                        det.fit(Ztr)
-                        s = det.score(Zte)
                         row = {
                             "dataset": ds.name,
                             "extractor": ext_name,
-                            "preprocessing": "+".join(map(str, pp)) if pp else "-",
+                            "preprocessing": pp_name,
                             "detector": _det_name(det_spec, det),
                             "seed": seed,
                             "n_train": len(Ztr),
                         }
-                        _add_metrics(row, ds.test_labels, s, det.predict(Zte), seed=seed, **opts)
+                        what = f"{ds.name} · seed {seed} · {ext_name} | {pp_name} | {row['detector']}"
+                        t1 = time.time()
+                        with step(f"fit {what}"):
+                            det.fit(Ztr)
+                        with step(f"score + metrics {what}"):
+                            s = det.score(Zte)
+                            _add_metrics(row, ds.test_labels, s, det.predict(Zte), seed=seed, **opts)
+                        dt = time.time() - t1
                         row.update(
                             threshold=float(det.threshold_), threshold_quantile=det.threshold_quantile,
-                            feat_dim=Ztr.shape[1], feat_time_s=round(t_feat, 2), det_time_s=round(time.time() - t1, 3),
+                            feat_dim=Ztr.shape[1], feat_time_s=round(t_feat, 2), det_time_s=round(dt, 3),
                         )
                         rows.append(row)
-                        if verbose:
-                            _log(row)
-    for spec in anomalib_models:
-        for ds in datasets:
+                        prog.add("detector", dt)
+                        _log_run(logger, prog, row, dt)
+    for i_m, spec in enumerate(anomalib_models, 1):
+        for i_ds, ds in enumerate(datasets, 1):
             for seed in seeds:
-                rows.append(_benchmark_anomalib(spec, ds, verbose, seed, train_subsample, **opts))
+                t1 = time.time()
+                logger.info(f"Anomalib model {i_m}/{len(anomalib_models)} [dataset {i_ds}/{len(datasets)}, seed {seed}]: "
+                            f"{_anomalib_name(spec)} on {ds.name}")
+                row = _benchmark_anomalib(spec, ds, verbose, seed, train_subsample, **opts)
+                dt = time.time() - t1
+                rows.append(row)
+                prog.add("anomalib", dt)
+                _log_run(logger, prog, row, dt)
+    _log_end(logger, prog, rows)
     return rows
+
+
+def _spec_name(spec) -> str:
+    if isinstance(spec, str):
+        return spec
+    if isinstance(spec, dict):
+        return str(spec.get("model_name") or spec.get("name") or f"{spec.get('type', 'hf')} extractor")
+    return getattr(spec, "model_name", type(spec).__name__)
+
+
+def _log_plan(log, extractors, preprocessings, detectors, anomalib_models, datasets, seeds, n_feat, n_anom,
+              train_subsample, bootstrap) -> None:
+    log.info(f"Benchmark plan: {len(datasets)} dataset(s), {len(seeds)} seed(s), {n_feat + n_anom} runs in total")
+    for ds in datasets:
+        log.info(f"  {ds.summary()}")
+    if n_feat:
+        log.info(f"  feature pipelines: {len(extractors)} extractor(s) × {len(preprocessings)} preprocessing(s) × "
+                 f"{len(detectors)} detector(s) × {len(datasets)} dataset(s) × {len(seeds)} seed(s) = {n_feat} runs")
+    if n_anom:
+        log.info(f"  anomalib: {len(anomalib_models)} model(s) × {len(datasets)} dataset(s) × {len(seeds)} seed(s) = {n_anom} runs")
+    extra = []
+    if train_subsample is not None:
+        extra.append(f"train_subsample={train_subsample}")
+    if bootstrap:
+        extra.append(f"bootstrap={bootstrap}")
+    if extra:
+        log.info("  options: " + ", ".join(extra))
+
+
+def _log_run(log, prog, row, seconds: float) -> None:
+    ci = f" [{row['auroc_ci_low']:.3f}, {row['auroc_ci_high']:.3f}]" if "auroc_ci_low" in row else ""
+    pix = f" pixel-AUROC={row['pixel_auroc']:.4f} AUPRO={row['aupro']:.4f}" if "pixel_auroc" in row else ""
+    took = f"{seconds:.2f}s" if seconds < 60 else fmt_duration(seconds)
+    log.info(f"{prog.counter()} {row['dataset']} · seed {row['seed']} · {row['config']}: "
+             f"AUROC={row['auroc']:.4f}{ci} AUPR={row['aupr']:.4f}{pix} ({took}) · {prog.timing()}")
+
+
+def _log_end(log, prog, rows) -> None:
+    if not rows:
+        log.info("Benchmark finished: no runs.")
+        return
+    by_cfg: Dict[str, List[float]] = {}
+    for r in rows:
+        by_cfg.setdefault(r["config"], []).append(r["auroc"])
+    best = max(by_cfg, key=lambda c: np.mean(by_cfg[c]))
+    log.info(f"Benchmark finished: {len(rows)} runs in {fmt_duration(prog.elapsed)}. "
+             f"Best mean AUROC {np.mean(by_cfg[best]):.4f}: {best}")
 
 
 def _subsample(n: int, size: Optional[Union[float, int]], seed: int) -> np.ndarray:
@@ -214,12 +302,6 @@ def _add_metrics(row, y, s, pred, seed: int, bootstrap: int, ci_alpha: float, ke
         row["scores"], row["labels"] = np.asarray(s, dtype=float), np.asarray(y, dtype=int)
 
 
-def _log(row) -> None:
-    ci = f" [{row['auroc_ci_low']:.4f}, {row['auroc_ci_high']:.4f}]" if "auroc_ci_low" in row else ""
-    pix = f" pixel-AUROC={row['pixel_auroc']:.4f} AUPRO={row['aupro']:.4f}" if "pixel_auroc" in row else ""
-    print(f"[{row['dataset']}] seed={row['seed']} {row['config']}: AUROC={row['auroc']:.4f}{ci} AUPR={row['aupr']:.4f}{pix}")
-
-
 def _benchmark_anomalib(spec, ds, verbose: bool, seed: int = 0, train_subsample=None, **opts) -> Dict[str, Any]:
     from .anomalib_backend import build_anomalib_pipeline
 
@@ -228,22 +310,23 @@ def _benchmark_anomalib(spec, ds, verbose: bool, seed: int = 0, train_subsample=
     t0 = time.time()
     pipe.fit(train, show_progress=verbose)
     t1 = time.time()
-    if ds.has_masks:
-        s, maps = pipe.score_and_maps(ds.test_paths, show_progress=verbose)
-    else:
-        s, maps = pipe.score(ds.test_paths, show_progress=verbose), None
+    what = "scoring test images" + (" + anomaly maps" if ds.has_masks else "")
+    with step(f"  {what} ({len(ds.test_paths)} images)", logging.INFO):
+        if ds.has_masks:
+            s, maps = pipe.score_and_maps(ds.test_paths, show_progress=verbose)
+        else:
+            s, maps = pipe.score(ds.test_paths, show_progress=verbose), None
     row = {"dataset": ds.name, "extractor": "anomalib", "preprocessing": "-", "detector": _anomalib_name(spec),
            "seed": seed, "n_train": len(train)}
     _add_metrics(row, ds.test_labels, s, (s > pipe.threshold_).astype(int), seed=seed, **opts)
     row.update(threshold=float(pipe.threshold_), threshold_quantile=pipe.threshold_quantile)
     if maps is not None:
-        row.update(evaluate_maps(ds.test_masks, maps))
+        with step("  pixel-level metrics (pixel-AUROC, AUPRO)"):
+            row.update(evaluate_maps(ds.test_masks, maps))
         if opts.get("keep_scores"):  # a few maps for the report's example figure
             row.update(example_maps=_example_maps(ds, s, maps), pixel_threshold=float(pipe.pixel_threshold_),
                        map_reference=float(pipe.map_reference_))
     row.update(fit_time_s=round(t1 - t0, 2), test_time_s=round(time.time() - t1, 2))
-    if verbose:
-        _log(row)
     return row
 
 

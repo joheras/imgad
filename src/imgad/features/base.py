@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -14,6 +15,7 @@ from tqdm.auto import tqdm
 
 from ..utils import ImageLike, as_list, batched, load_image
 
+logger = logging.getLogger("imgad.features")
 _EXTRACTORS: Dict[str, Type["FeatureExtractor"]] = {}
 
 
@@ -94,19 +96,30 @@ class FeatureExtractor(ABC):
             return np.zeros((0, 0), dtype=np.float32)
         return np.concatenate(feats, axis=0)
 
+    def _cache_dir(self, cache_dir: Path) -> Path:
+        return Path(cache_dir) / hashlib.sha1(self.identifier.encode()).hexdigest()[:16]
+
+    def _cache_key(self, d: Path, p) -> Path:
+        st = os.stat(p)
+        h = hashlib.sha1(f"{os.path.abspath(p)}|{st.st_mtime_ns}|{st.st_size}".encode()).hexdigest()
+        return d / f"{h}.npy"
+
+    def cached_count(self, images, cache_dir: Optional[str | os.PathLike]) -> int:
+        """How many of ``images`` already have cached features (0 without a cache or for in-memory images)."""
+        if cache_dir is None:
+            return 0
+        d = self._cache_dir(cache_dir)
+        if not d.exists():
+            return 0
+        return sum(self._cache_key(d, p).exists() for p in as_list(images) if isinstance(p, (str, os.PathLike)))
+
     def _extract_cached(self, paths: List, cache_dir: Path, show_progress: bool) -> np.ndarray:
-        ext_hash = hashlib.sha1(self.identifier.encode()).hexdigest()[:16]
-        d = cache_dir / ext_hash
+        d = self._cache_dir(cache_dir)
         d.mkdir(parents=True, exist_ok=True)
         (d / "extractor.json").write_text(self.identifier)
-
-        def key(p) -> Path:
-            st = os.stat(p)
-            h = hashlib.sha1(f"{os.path.abspath(p)}|{st.st_mtime_ns}|{st.st_size}".encode()).hexdigest()
-            return d / f"{h}.npy"
-
-        keys = [key(p) for p in paths]
+        keys = [self._cache_key(d, p) for p in paths]
         missing = [i for i, k in enumerate(keys) if not k.exists()]
+        logger.debug(f"feature cache {d}: {len(paths) - len(missing)}/{len(paths)} cached, extracting {len(missing)}")
         if missing:
             new = self._extract_all([paths[i] for i in missing], show_progress)
             for i, f in zip(missing, new):
