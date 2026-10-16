@@ -1,0 +1,21 @@
+# Dataset propio organizado en carpetas
+data:
+  type: folders
+  name: mi_dataset
+  train_normal: /ruta/train/normal
+  test_normal: /ruta/test/normal
+  test_anomalous: [/ruta/test/defecto_a, /ruta/test/defecto_b]
+
+cache_dir: .feature_cache
+
+extractors:
+  - openai/clip-vit-base-patch32          # un string = modelo HF con opciones por defecto
+  - {type: hf, model_name: facebook/dinov2-small}
+
+preprocessing:
+  - [l2]
+
+detectors:
+  - {name: knn, k: 1}
+  - mahalanobis
+  - iforest

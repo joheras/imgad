@@ -1,0 +1,55 @@
+# imgad benchmark --config configs/mvtec_benchmark.yaml --out results/mvtec.csv
+#
+# Rejilla: extractores x preprocesado x detectores x categorías.
+# Las features se extraen una vez por (extractor, categoría) y se cachean en disco.
+
+data:
+  type: mvtec                 # mvtec | folders | one_vs_rest
+  root: /ruta/a/mvtec_anomaly_detection
+  categories: [bottle, cable, capsule, carpet, grid, hazelnut, leather, metal_nut,
+               pill, screw, tile, toothbrush, transistor, wood, zipper]
+  # categories: null          # -> todas las que encuentre
+
+cache_dir: .feature_cache
+
+# Repeticiones e incertidumbre (ver "Análisis estadístico" en el README)
+seeds: [0, 1, 2, 3, 4]        # una fila por semilla y configuración
+train_subsample: 0.8          # por semilla, 80% de las normales de entrenamiento (sin esto kNN/Mahalanobis no varían)
+bootstrap: 1000               # IC 95% de AUROC/AUPR remuestreando el test (0 = desactivado)
+ci_alpha: 0.05
+
+extractors:
+  - {type: hf, model_name: openai/clip-vit-base-patch16}
+  - {type: hf, model_name: openai/clip-vit-large-patch14}
+  - {type: hf, model_name: google/siglip-base-patch16-224}
+  - {type: hf, model_name: facebook/dinov2-base, pooling: cls+mean}
+  # Capas intermedias (suelen funcionar mejor para defectos locales):
+  - {type: hf, model_name: openai/clip-vit-base-patch16, pooling: mean, layer: [6, 9, 12]}
+  # Checkpoints en formato open_clip (pip install open_clip_torch):
+  # - {type: open_clip, model_name: "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K"}
+
+preprocessing:
+  - [l2]
+  - [l2, pca:0.95]
+
+detectors:
+  - {name: knn, k: 1}
+  - {name: knn, k: 5}
+  - mahalanobis
+  - centroid
+  - {name: kmeans, n_clusters: 8}
+  - lof
+  - {name: gmm, n_components: 4}
+  - ocsvm
+  - iforest
+  - {name: pca, n_components: 0.9}
+  - {name: ensemble, members: [{name: knn, k: 1}, mahalanobis], normalization: zscore}
+  # - {name: pyod, model: ECOD}   # pip install pyod
+
+# Modelos de anomalib (pip install -e ".[anomalib]"): se entrenan por categoría y, si el dataset
+# tiene máscaras (MVTec: ground_truth/), se añaden pixel-AUROC, AUPR, F1-max y AUPRO.
+anomalib:
+  - {name: patchcore, backbone: wide_resnet50_2, layers: [layer2, layer3], coreset_sampling_ratio: 0.1}
+  - {name: padim, backbone: resnet18}
+  # - {name: efficient_ad, max_epochs: 70}        # descarga imagenette para el entrenamiento
+  # - {name: fastflow, backbone: resnet18, max_epochs: 50}

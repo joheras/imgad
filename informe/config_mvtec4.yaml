@@ -1,0 +1,25 @@
+data:
+  type: mvtec
+  root: /ruta/a/mvtec  # cambiar
+  categories: [bottle, hazelnut, screw, carpet]
+cache_dir: .feature_cache
+extractors:
+  - {type: hf, model_name: openai/clip-vit-base-patch16, batch_size: 16}
+  - {type: hf, model_name: openai/clip-vit-base-patch16, pooling: mean, layer: [6, 9, 12], batch_size: 16}
+  - {type: hf, model_name: google/siglip-base-patch16-224, batch_size: 16}
+  - {type: hf, model_name: facebook/dinov2-base, pooling: cls+mean, batch_size: 16}
+  - {type: hf, model_name: facebook/dinov2-base, pooling: mean, layer: [6, 9, 12], batch_size: 16}
+preprocessing:
+  - [l2]
+detectors:
+  - {name: knn, k: 1}
+  - {name: knn, k: 5}
+  - mahalanobis
+  - centroid
+  - {name: kmeans, n_clusters: 8}
+  - lof
+  - {name: gmm, n_components: 4}
+  - ocsvm
+  - iforest
+  - {name: pca, n_components: 0.9}
+  - {name: ensemble, members: [{name: knn, k: 1}, mahalanobis]}

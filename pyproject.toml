@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imgad"
+version = "0.1.0"
+description = "Image anomaly detection with foundation-model features (CLIP-style, HuggingFace) + classical detectors, and anomalib models"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Jónathan Heras" }]
+dependencies = [
+    "numpy>=1.23",
+    "scikit-learn>=1.2",
+    "torch>=2.0",
+    "transformers>=4.40",
+    "pillow>=9.0",
+    "joblib>=1.2",
+    "pyyaml>=6.0",
+    "tqdm>=4.60",
+]
+
+[project.optional-dependencies]
+open_clip = ["open_clip_torch>=2.20"]
+pyod = ["pyod>=1.1"]
+pandas = ["pandas>=1.5"]
+anomalib = ["anomalib>=2.0"]
+dev = ["pytest>=7"]
+all = ["open_clip_torch>=2.20", "pyod>=1.1", "pandas>=1.5", "anomalib>=2.0", "pytest>=7"]
+
+[project.scripts]
+imgad = "imgad.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
