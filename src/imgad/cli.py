@@ -215,6 +215,7 @@ def cmd_benchmark(args):
         keep_scores=bool(args.scores_out or args.report),
         verbose=not args.quiet,
         token=_token(args),
+        **_parallel_kwargs(args, cfg),
     )
     if args.out:
         _write_csv(rows, args.out)
@@ -288,6 +289,54 @@ def _add_progress_args(p) -> None:
     g.add_argument("-q", "--quiet", action="store_true", help="only warnings and errors (no progress bars)")
     g.add_argument("-v", "--verbose", action="store_true", help="log every step (fit, score, cache, timings)")
     p.add_argument("--log-file", default=None, help="also write the full (DEBUG) log with timestamps to this file")
+
+
+def _parallel_kwargs(args, cfg) -> dict:
+    """Parallel options: CLI flags override the ``parallel:`` section of the YAML."""
+    p = dict(cfg.get("parallel") or {})
+    out = {}
+    jobs = args.jobs if args.jobs is not None else p.get("jobs")
+    if jobs is not None:
+        out["n_jobs"] = int(jobs)
+    devices = args.devices if args.devices is not None else p.get("devices")
+    if devices is not None:
+        out["devices"] = devices
+    gpu_jobs = args.gpu_jobs if args.gpu_jobs is not None else p.get("gpu_jobs")
+    if gpu_jobs is not None:
+        out["gpu_jobs"] = gpu_jobs if gpu_jobs == "auto" else int(gpu_jobs)
+    gpu_mem = args.gpu_mem_gb if args.gpu_mem_gb is not None else p.get("gpu_mem_gb")
+    if gpu_mem is not None:
+        out["gpu_mem_gb"] = float(gpu_mem)
+    return out
+
+
+def cmd_devices(args):
+    from imgad.devices import GiB, ResourceManager, estimate_extractor_bytes, list_devices, resolve_devices
+
+    devs = list_devices()
+    print("Devices:")
+    for d in devs:
+        print(f"  {d}")
+    try:
+        use = resolve_devices(args.devices)
+    except ValueError as e:
+        raise SystemExit(f"error: {e}")
+    rm = ResourceManager(use, args.gpu_jobs if args.gpu_jobs == "auto" else int(args.gpu_jobs))
+    print(f"With --devices {args.devices} the benchmark would run accelerator jobs on:")
+    for line in rm.describe():
+        print(f"  {line}")
+    if args.config:
+        from imgad.evaluation import _hub_name
+
+        with open(args.config) as f:
+            cfg = yaml.safe_load(f)
+        default = int((args.gpu_mem_gb or 4) * GiB)
+        print("Estimated GPU memory per feature extractor (checkpoint size + activations + CUDA context):")
+        for spec in cfg.get("extractors") or []:
+            name = _hub_name(spec) or str(spec)
+            conf = spec if isinstance(spec, dict) else {"model_name": spec}
+            est = estimate_extractor_bytes(conf, default)
+            print(f"  {name}: ~{est / GiB:.1f} GiB" + ("  (default, size unknown)" if est == default else ""))
 
 
 def cmd_report(args):
@@ -431,6 +480,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write a markdown report (data analysis, methods, results with figures, discussion) to DIR")
     b.add_argument("--report-title", default=None)
     _add_progress_args(b)
+    g = b.add_argument_group("parallel execution (default: sequential)")
+    g.add_argument("-j", "--jobs", type=int, default=None, help="CPU worker processes for detector runs (-1 = all cores)")
+    g.add_argument("--devices", default=None,
+                   help="where feature extractors / anomalib models run: auto (all GPUs), cpu, cuda:0,cuda:1 ...")
+    g.add_argument("--gpu-jobs", default=None, help="max concurrent jobs per GPU (default auto: as many as fit in memory)")
+    g.add_argument("--gpu-mem-gb", type=float, default=None,
+                   help="GPU memory assumed for a job of unknown size (default: from the checkpoint size, else 4)")
     _add_token_arg(b)
     b.set_defaults(func=cmd_benchmark)
 
@@ -453,6 +509,13 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--cd-plot", default=None, help="save a critical-difference diagram (needs matplotlib)")
     st.add_argument("--out", default=None, help="write the report as markdown")
     st.set_defaults(func=cmd_stats)
+    dv = sub.add_parser("devices", help="Show GPUs/CPU, free memory and how a parallel benchmark would use them")
+    dv.add_argument("--devices", default="auto")
+    dv.add_argument("--gpu-jobs", default="auto")
+    dv.add_argument("--gpu-mem-gb", type=float, default=None)
+    dv.add_argument("--config", default=None, help="benchmark YAML: estimate the GPU memory of its extractors")
+    dv.set_defaults(func=cmd_devices)
+
     hl = sub.add_parser("hf-login", help="Store a Hugging Face token for gated/private models (input hidden)")
     _add_token_arg(hl)
     hl.set_defaults(func=cmd_hf_login)

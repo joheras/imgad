@@ -94,6 +94,7 @@ class BenchmarkProgress:
         self.t0 = time.time()
         self.n_runs = totals.get("detector", 0) + totals.get("anomalib", 0)
         self.runs_done = 0
+        self.workers: Dict[str, int] = {}  # parallel workers per kind (the ETA divides by them)
 
     def add(self, kind: str, seconds: float) -> None:
         self.done[kind] += 1
@@ -117,7 +118,7 @@ class BenchmarkProgress:
                 untimed.append(kind)
                 continue
             timed = True
-            rest += left * self.spent[kind] / self.done[kind]
+            rest += left * self.spent[kind] / self.done[kind] / max(1, self.workers.get(kind, 1))
         return (rest if timed or not untimed else None), untimed
 
     def counter(self) -> str:
