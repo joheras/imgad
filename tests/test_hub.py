@@ -4,7 +4,6 @@ import os
 import pickle
 from types import SimpleNamespace
 
-import httpx
 import pytest
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 
@@ -16,8 +15,12 @@ SECRET = "hf_THIS_IS_A_TEST_SECRET"
 
 
 def _err(cls, status=401):
-    resp = httpx.Response(status, request=httpx.Request("GET", "https://huggingface.co/api/models/x"))
-    return cls("error", response=resp)
+    """Hub error with an HTTP status, built without calling __init__: its signature (and the HTTP library,
+    requests or httpx) differs between huggingface_hub versions."""
+    e = cls.__new__(cls)
+    Exception.__init__(e, "error")
+    e.response = SimpleNamespace(status_code=status, headers={})
+    return e
 
 
 @pytest.fixture
