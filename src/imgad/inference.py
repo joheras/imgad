@@ -6,12 +6,12 @@
     r = predictor.predict_one("img.png")
     print(r.is_anomaly, r.score, r.normal_percentile)
 
-    results = predictor.predict("carpeta/")                     # folder, list of paths, PIL images...
-    predictor.save_results(results, "predicciones.csv")         # .csv or .json
+    results = predictor.predict("folder/")                     # folder, list of paths, PIL images...
+    predictor.save_results(results, "predictions.csv")         # .csv or .json
 
     # anomalib models (PatchCore, PaDiM...): pixel-level anomaly maps
-    results = predictor.predict("carpeta/", return_maps=True)   # r.anomaly_map at original image size
-    predictor.save_maps(results, "mapas/")                      # heatmap overlays + binary masks
+    results = predictor.predict("folder/", return_maps=True)   # r.anomaly_map at original image size
+    predictor.save_maps(results, "maps/")                      # heatmap overlays + binary masks
 """
 
 from __future__ import annotations

@@ -174,7 +174,8 @@ def benchmark(
                         }
                         _add_metrics(row, ds.test_labels, s, det.predict(Zte), seed=seed, **opts)
                         row.update(
-                            feat_dim=Ztr.shape[1], feat_time_s=round(t_feat, 2), det_time_s=round(time.time() - t1, 3)
+                            threshold=float(det.threshold_), threshold_quantile=det.threshold_quantile,
+                            feat_dim=Ztr.shape[1], feat_time_s=round(t_feat, 2), det_time_s=round(time.time() - t1, 3),
                         )
                         rows.append(row)
                         if verbose:
@@ -231,15 +232,50 @@ def _benchmark_anomalib(spec, ds, verbose: bool, seed: int = 0, train_subsample=
         s, maps = pipe.score_and_maps(ds.test_paths, show_progress=verbose)
     else:
         s, maps = pipe.score(ds.test_paths, show_progress=verbose), None
-    row = {"dataset": ds.name, "extractor": "anomalib", "preprocessing": "-", "detector": _det_name(spec, pipe),
+    row = {"dataset": ds.name, "extractor": "anomalib", "preprocessing": "-", "detector": _anomalib_name(spec),
            "seed": seed, "n_train": len(train)}
     _add_metrics(row, ds.test_labels, s, (s > pipe.threshold_).astype(int), seed=seed, **opts)
+    row.update(threshold=float(pipe.threshold_), threshold_quantile=pipe.threshold_quantile)
     if maps is not None:
         row.update(evaluate_maps(ds.test_masks, maps))
+        if opts.get("keep_scores"):  # a few maps for the report's example figure
+            row.update(example_maps=_example_maps(ds, s, maps), pixel_threshold=float(pipe.pixel_threshold_),
+                       map_reference=float(pipe.map_reference_))
     row.update(fit_time_s=round(t1 - t0, 2), test_time_s=round(time.time() - t1, 2))
     if verbose:
         _log(row)
     return row
+
+
+def _example_maps(ds, scores, maps, n_anomalous: int = 3) -> Dict[int, np.ndarray]:
+    """Index -> map (<= 128 px) for one anomalous image per defect type (highest score) and the median
+    normal image."""
+    from .maps import resize_map
+
+    y, types = np.asarray(ds.test_labels), np.asarray(ds.test_types)
+    picked = []
+    for t in sorted(set(types[y == 1]))[:n_anomalous]:
+        idx = np.flatnonzero((y == 1) & (types == t))
+        picked.append(int(idx[np.argmax(scores[idx])]))
+    normal = np.flatnonzero(y == 0)
+    if len(normal):
+        picked.append(int(normal[np.argsort(scores[normal])[len(normal) // 2]]))
+    out = {}
+    for i in picked:
+        h, w = maps[i].shape
+        f = min(1.0, 128 / max(h, w))
+        out[i] = resize_map(maps[i], (max(1, round(h * f)), max(1, round(w * f))))
+    return out
+
+
+_ANOMALIB_NOISE = ("device", "pre_trained", "batch_size", "train_batch_size", "num_workers", "seed")
+
+
+def _anomalib_name(spec) -> str:
+    """Anomalib spec name without run-time settings (device, batch size...) that do not define the model."""
+    if isinstance(spec, dict):
+        spec = {k: v for k, v in spec.items() if k not in _ANOMALIB_NOISE}
+    return _det_name(spec, spec)
 
 
 def _det_name(spec, det) -> str:

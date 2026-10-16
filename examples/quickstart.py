@@ -1,6 +1,6 @@
 """Quickstart: CLIP features + kNN on one MVTec AD category.
 
-    python examples/quickstart.py --root /ruta/a/mvtec_anomaly_detection --category bottle
+    python examples/quickstart.py --root /path/to/mvtec_anomaly_detection --category bottle
 """
 
 import argparse
@@ -26,10 +26,10 @@ pipe = AnomalyDetectionPipeline(
 pipe.fit(ds.train_paths)
 
 scores = pipe.score(ds.test_paths)
-preds = pipe.predict(ds.test_paths)  # umbral = cuantil 95% de scores normales (out-of-fold)
+preds = pipe.predict(ds.test_paths)  # threshold = 95% quantile of out-of-fold normal scores
 
 print(evaluate_scores(ds.test_labels, scores, preds))
 print(per_type_auroc(ds.test_labels, scores, ds.test_types))
 
 pipe.save(f"{args.category}.joblib")
-# Más tarde: AnomalyDetectionPipeline.load(f"{args.category}.joblib").score(["nueva.png"])
+# Later: AnomalyDetectionPipeline.load(f"{args.category}.joblib").score(["new.png"])
