@@ -1,6 +1,6 @@
 data:
   type: mvtec
-  root: /ruta/a/mvtec  # cambiar
+  root: /ruta/a/mvtec  # change
   categories: [bottle, hazelnut, screw, carpet]
 cache_dir: .feature_cache
 extractors:

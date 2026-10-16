@@ -4,12 +4,12 @@
     imgad fit   --model openai/clip-vit-base-patch32 --detector knn -p k=1 --prep l2 \
                 --train data/bottle/train/good --out bottle.joblib
     imgad fit   --anomalib patchcore -p backbone=wide_resnet50_2 --train data/bottle/train/good --out pc.joblib
-    imgad predict --model bottle.joblib nueva.png carpeta/ --out preds.csv
-    imgad predict --model pc.joblib carpeta/ --maps-dir mapas/ --out preds.csv
+    imgad predict --model bottle.joblib new.png folder/ --out preds.csv
+    imgad predict --model pc.joblib folder/ --maps-dir maps/ --out preds.csv
     imgad calibrate --model bottle.joblib --normal val/good --anomalous val/defects --method f1
     imgad info --model bottle.joblib
     imgad benchmark --config configs/mvtec_benchmark.yaml --out results.csv --seeds 0 1 2 --bootstrap 1000 --stats
-    imgad stats --results results.csv --metric auroc --cd-plot cd.png --out informe.md
+    imgad stats --results results.csv --metric auroc --cd-plot cd.png --out stats.md
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import json
 import sys
 from typing import Any, Dict, List
 
+import numpy as np
 import yaml
 
 
@@ -41,7 +42,8 @@ def _kv(pairs: List[str]) -> Dict[str, Any]:
 def _write_csv(rows: List[Dict[str, Any]], path: str) -> None:
     if not rows:
         return
-    rows = [{k: v for k, v in r.items() if not hasattr(v, "shape")} for r in rows]  # drop per-image arrays
+    scalar = (str, int, float, bool, type(None), np.number)
+    rows = [{k: v for k, v in r.items() if isinstance(v, scalar)} for r in rows]  # drop per-image arrays / maps
     keys = list(dict.fromkeys(k for r in rows for k in r))
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys)
@@ -189,7 +191,7 @@ def cmd_benchmark(args):
         train_subsample=subsample,
         bootstrap=bootstrap,
         ci_alpha=cfg.get("ci_alpha", 0.05),
-        keep_scores=bool(args.scores_out),
+        keep_scores=bool(args.scores_out or args.report),
     )
     if args.out:
         _write_csv(rows, args.out)
@@ -200,6 +202,12 @@ def cmd_benchmark(args):
         joblib.dump(rows, args.scores_out)
         print(f"Per-image scores -> {args.scores_out} (imgad stats --scores ...)")
     print(to_markdown(rows))
+    if args.report:
+        from imgad.report import generate_report
+
+        path = generate_report(rows, datasets, args.report, config=cfg, title=args.report_title, metric=args.metric,
+                               alpha=cfg.get("ci_alpha", 0.05), command="imgad " + " ".join(args.argv))
+        print(f"Report -> {path}")
     if args.stats:
         _print_stats(rows, args.metric, cfg.get("ci_alpha", 0.05), None, None)
 
@@ -210,8 +218,8 @@ def _print_stats(rows, metric: str, alpha: float, cd_plot, out, baseline=None) -
     lines = []
     if len({r.get("seed", 0) for r in rows}) > 1:
         summ = stats.summarize_seeds(rows, metrics=(metric,), alpha=alpha)
-        lines += [f"### Repeticiones ({metric}: media ± desv. típica, IC {1 - alpha:.0%} de la media)", "",
-                  "| dataset | configuración | semillas | media ± std | IC |", "|---|---|---|---|---|"]
+        lines += [f"### Repetitions ({metric}: mean ± std, {1 - alpha:.0%} CI of the mean)", "",
+                  "| dataset | configuration | seeds | mean ± std | CI |", "|---|---|---|---|---|"]
         for r in summ:
             if f"{metric}_std" in r:
                 lines.append(f"| {r['dataset']} | {stats.md_escape(r['config'])} | {r['n_seeds']} | {r[f'{metric}_mean']:.4f} ± "
@@ -222,15 +230,15 @@ def _print_stats(rows, metric: str, alpha: float, cd_plot, out, baseline=None) -
         lines.append(stats.report_markdown(res))
         if cd_plot and "cd" in res:
             stats.plot_cd_diagram(res, cd_plot)
-            lines.append(f"\nDiagrama CD -> {cd_plot}")
+            lines.append(f"\nCD diagram -> {cd_plot}")
     except ValueError as e:
         res = None
-        lines.append(f"(comparación entre datasets omitida: {e})")
+        lines.append(f"(comparison across datasets skipped: {e})")
     if baseline is not None or (rows and "scores" in rows[0]):
         base = baseline or (res["configs"][0] if res else rows[0]["config"])
         tests = stats.delong_vs_baseline(rows, base, alpha)
-        lines += ["", f"### DeLong frente a {stats.md_escape(base)} (por dataset y semilla, Holm por bloque)", "",
-                  "| dataset | seed | configuración | ΔAUROC | IC | p (Holm) |", "|---|---|---|---|---|---|"]
+        lines += ["", f"### DeLong vs. {stats.md_escape(base)} (per dataset and seed, Holm within each block)", "",
+                  "| dataset | seed | configuration | ΔAUROC | CI | p (Holm) |", "|---|---|---|---|---|---|"]
         lines += [f"| {t['dataset']} | {t['seed']} | {stats.md_escape(t['config'])} | {t['diff']:+.4f} | [{t['diff_low']:+.4f}, "
                   f"{t['diff_high']:+.4f}] | {t['p_holm']:.3g}{' *' if t['significant'] else ''} |" for t in tests]
     text = "\n".join(lines)
@@ -239,6 +247,21 @@ def _print_stats(rows, metric: str, alpha: float, cd_plot, out, baseline=None) -
         with open(out, "w") as f:
             f.write(text + "\n")
         print(f"Report -> {out}")
+
+
+def cmd_report(args):
+    import joblib
+
+    from imgad.report import generate_report
+
+    rows = joblib.load(args.scores)
+    cfg, datasets = None, []
+    if args.config:
+        with open(args.config) as f:
+            cfg = yaml.safe_load(f)
+        datasets = _datasets_from_config(cfg)
+    path = generate_report(rows, datasets, args.out, config=cfg, title=args.title, metric=args.metric, alpha=args.alpha)
+    print(f"Report -> {path}")
 
 
 def cmd_stats(args):
@@ -319,7 +342,19 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--scores-out", default=None, help="save rows + per-image scores (.joblib) for paired tests")
     b.add_argument("--stats", action="store_true", help="print seed summary and statistical comparison")
     b.add_argument("--metric", default="auroc")
+    b.add_argument("--report", default=None, metavar="DIR",
+                   help="write a markdown report (data analysis, methods, results with figures, discussion) to DIR")
+    b.add_argument("--report-title", default=None)
     b.set_defaults(func=cmd_benchmark)
+
+    rp = sub.add_parser("report", help="Build the markdown report from a benchmark --scores-out file")
+    rp.add_argument("--scores", required=True, help="file written by benchmark --scores-out")
+    rp.add_argument("--config", default=None, help="benchmark YAML (enables the dataset analysis and example images)")
+    rp.add_argument("--out", default="report", help="output folder")
+    rp.add_argument("--title", default=None)
+    rp.add_argument("--metric", default="auroc")
+    rp.add_argument("--alpha", type=float, default=0.05)
+    rp.set_defaults(func=cmd_report)
 
     st = sub.add_parser("stats", help="Statistical comparison of benchmark results (ranks, Friedman, Nemenyi, Wilcoxon, DeLong)")
     st.add_argument("--results", default=None, help="benchmark CSV")
@@ -335,7 +370,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None):
     ap = build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = ap.parse_args(argv)
+    args.argv = argv
     if getattr(args, "func", None) is cmd_predict:
         args.inputs = list(args.inputs) + list(args.images)
         if not args.inputs:

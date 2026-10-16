@@ -4,15 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imgad"
-version = "0.1.0"
-description = "Image anomaly detection with foundation-model features (CLIP-style, HuggingFace) + classical detectors, and anomalib models"
+dynamic = ["version"]
+description = "Image anomaly detection with foundation-model features (CLIP, SigLIP, DINOv2) + classical detectors, Anomalib models, and statistical benchmarking"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Jónathan Heras" }]
+keywords = [
+    "anomaly-detection", "one-class", "computer-vision", "foundation-models", "clip", "dinov2",
+    "anomalib", "patchcore", "mvtec", "benchmark",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
 dependencies = [
     "numpy>=1.23",
+    "scipy>=1.9",
     "scikit-learn>=1.2",
     "torch>=2.0",
     "transformers>=4.40",
@@ -23,18 +42,24 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/joheras/imgad"
 Repository = "https://github.com/joheras/imgad"
+Issues = "https://github.com/joheras/imgad/issues"
 
 [project.optional-dependencies]
 open_clip = ["open_clip_torch>=2.20"]
 pyod = ["pyod>=1.1"]
 pandas = ["pandas>=1.5"]
 anomalib = ["anomalib>=2.0"]
-dev = ["pytest>=7"]
-all = ["open_clip_torch>=2.20", "pyod>=1.1", "pandas>=1.5", "anomalib>=2.0", "pytest>=7"]
+report = ["matplotlib>=3.5"]
+dev = ["pytest>=7", "matplotlib>=3.5", "build", "twine"]
+all = ["open_clip_torch>=2.20", "pyod>=1.1", "pandas>=1.5", "anomalib>=2.0", "matplotlib>=3.5", "pytest>=7"]
 
 [project.scripts]
 imgad = "imgad.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "imgad.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

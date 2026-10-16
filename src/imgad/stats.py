@@ -292,8 +292,8 @@ def delong_vs_baseline(rows: List[Dict[str, Any]], baseline: str, alpha: float =
 def report_markdown(res: Dict[str, Any], max_pairs: Optional[int] = None) -> str:
     """Markdown summary of :func:`compare_configs`."""
     m, n, k = res["metric"], len(res["datasets"]), len(res["configs"])
-    lines = [f"### Comparación de configuraciones ({m}, {n} datasets, {k} configuraciones)", "",
-             f"| rank medio | {m} medio | configuración |", "|---|---|---|"]
+    lines = [f"### Comparison of configurations ({m}, {n} datasets, {k} configurations)", "",
+             f"| mean rank | mean {m} | configuration |", "|---|---|---|"]
     lines += [f"| {r:.2f} | {v:.4f} | {md_escape(c)} |" for c, r, v in zip(res["configs"], res["avg_rank"], res["mean"])]
     if "friedman" in res:
         f = res["friedman"]
@@ -301,13 +301,13 @@ def report_markdown(res: Dict[str, Any], max_pairs: Optional[int] = None) -> str
                       f"F={f['iman_davenport_F']:.3f}, p={f['iman_davenport_p']:.3g} · "
                       f"Nemenyi CD (α={res['alpha']}) = {res['cd']:.3f}"]
     pairs = res["pairs"] if max_pairs is None else res["pairs"][:max_pairs]
-    lines += ["", f"| A | B | Δ{m} medio | V/E/D | Wilcoxon p (Holm) | Nemenyi p |", "|---|---|---|---|---|---|"]
+    lines += ["", f"| A | B | mean Δ{m} | W/T/L | Wilcoxon p (Holm) | Nemenyi p |", "|---|---|---|---|---|---|"]
     for p in pairs:
         star = " *" if p["significant"] else ""
         nem = f"{p['nemenyi_p']:.3g}" if "nemenyi_p" in p else "-"
         lines.append(f"| {md_escape(p['a'])} | {md_escape(p['b'])} | {p['mean_diff']:+.4f} | {p['wins']}/{p['ties']}/{p['losses']} | "
                      f"{p['wilcoxon_p_holm']:.3g}{star} | {nem} |")
-    lines += ["", "V/E/D: datasets donde A gana/empata/pierde frente a B. * = significativo tras Holm."]
+    lines += ["", "W/T/L: datasets where A wins/ties/loses against B. * = significant after Holm."]
     return "\n".join(lines)
 
 

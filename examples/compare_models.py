@@ -1,7 +1,7 @@
 """Compare several HF backbones x classical detectors on MVTec AD and save a CSV.
 
-    python examples/compare_models.py --root /ruta/a/mvtec_anomaly_detection --categories bottle screw
-    python examples/compare_models.py --root /ruta/a/mvtec_anomaly_detection --seeds 0 1 2 --cd-plot cd.png
+    python examples/compare_models.py --root /path/to/mvtec_anomaly_detection --categories bottle screw
+    python examples/compare_models.py --root /path/to/mvtec_anomaly_detection --seeds 0 1 2 --cd-plot cd.png
 """
 
 import argparse
@@ -47,7 +47,7 @@ with open(args.out, "w", newline="") as f:
 
 print(to_markdown(rows))
 
-# Media por (extractor, detector) sobre categorías
+# Mean per (extractor, detector) over categories
 try:
     import pandas as pd
 
@@ -56,13 +56,13 @@ try:
 except ImportError:
     pass
 
-# Tests estadísticos entre configuraciones (cada categoría es un bloque)
+# Statistical tests between configurations (each category is a block)
 if len(datasets) >= 2:
     res = stats.compare_configs(rows, metric="auroc")
     print(stats.report_markdown(res, max_pairs=15))
     if args.cd_plot:
         stats.plot_cd_diagram(res, args.cd_plot)
-    # ¿la mejor configuración supera a las demás en cada categoría? (DeLong, Holm por categoría)
+    # does the best configuration beat the others on each category? (DeLong, Holm per category)
     for t in stats.delong_vs_baseline(rows, baseline=res["configs"][0]):
         if t["significant"]:
             print(f"[{t['dataset']} seed={t['seed']}] {t['config']}: ΔAUROC={t['diff']:+.4f} p={t['p_holm']:.3g}")
