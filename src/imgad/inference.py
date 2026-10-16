@@ -83,8 +83,10 @@ class AnomalyPredictor:
         device: Optional[str] = None,
         threshold: Optional[float] = None,
         batch_size: Optional[int] = None,
+        token=None,
     ) -> "AnomalyPredictor":
-        return cls(load_pipeline(path, device=device, batch_size=batch_size), threshold)
+        """``token``: Hugging Face access token for gated/private extractors (never stored)."""
+        return cls(load_pipeline(path, device=device, batch_size=batch_size, token=token), threshold)
 
     # ------------------------------------------------------------------ core
     def predict(

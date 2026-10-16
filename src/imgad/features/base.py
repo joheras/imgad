@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -34,15 +35,20 @@ def list_extractors() -> List[str]:
     return sorted(_EXTRACTORS)
 
 
-def build_extractor(config: Dict[str, Any] | str, **kwargs) -> "FeatureExtractor":
-    """Build an extractor from ``{"type": "hf", "model_name": ...}`` or a bare HF model id."""
+def build_extractor(config: Dict[str, Any] | str, token=None, **kwargs) -> "FeatureExtractor":
+    """Build an extractor from ``{"type": "hf", "model_name": ...}`` or a bare HF model id.
+    ``token``: Hugging Face access token for gated/private models (passed only to extractors that
+    accept one; see :mod:`imgad.hub`)."""
     if isinstance(config, str):
         config = {"type": "hf", "model_name": config}
     config = {**config, **kwargs}
     kind = config.pop("type", "hf")
     if kind not in _EXTRACTORS:
         raise KeyError(f"Unknown extractor type {kind!r}. Available: {list_extractors()}")
-    return _EXTRACTORS[kind](**config)
+    cls = _EXTRACTORS[kind]
+    if token is not None and "token" in inspect.signature(cls.__init__).parameters:
+        config["token"] = token
+    return cls(**config)
 
 
 class FeatureExtractor(ABC):

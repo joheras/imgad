@@ -6,10 +6,11 @@ Requires ``pip install open_clip_torch``.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
+from ..hub import raise_if_hub_error, token_env
 from ..utils import resolve_device
 from .base import FeatureExtractor, register_extractor
 
@@ -23,8 +24,10 @@ class OpenCLIPFeatureExtractor(FeatureExtractor):
         normalize: bool = True,
         device: Optional[str] = None,
         batch_size: int = 32,
+        token: Union[None, bool, str] = None,
     ):
         self.model_name = model_name
+        self._token = token  # never part of get_config()
         self.pretrained = pretrained
         self.normalize = normalize
         self.device = resolve_device(device)
@@ -39,7 +42,13 @@ class OpenCLIPFeatureExtractor(FeatureExtractor):
             import open_clip
         except ImportError as e:  # pragma: no cover
             raise ImportError("OpenCLIPFeatureExtractor requires `pip install open_clip_torch`.") from e
-        model, _, preprocess = open_clip.create_model_and_transforms(self.model_name, pretrained=self.pretrained)
+        try:
+            with token_env(self._token):  # open_clip has no token argument
+                model, _, preprocess = open_clip.create_model_and_transforms(self.model_name, pretrained=self.pretrained)
+        except Exception as e:
+            if self.model_name.startswith("hf-hub:"):
+                raise_if_hub_error(e, self.model_name, self._token)
+            raise
         self._model = model.eval().to(self.device)
         self._preprocess = preprocess
 
@@ -53,6 +62,11 @@ class OpenCLIPFeatureExtractor(FeatureExtractor):
         if self.normalize:
             f = torch.nn.functional.normalize(f, dim=-1)
         return f.cpu().numpy()
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state["_token"] = None  # pickles (e.g. sent to worker processes) never carry the access token
+        return state
 
     def get_config(self) -> Dict[str, Any]:
         return dict(

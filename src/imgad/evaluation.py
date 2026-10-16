@@ -110,6 +110,8 @@ def benchmark(
     bootstrap: int = 0,
     ci_alpha: float = 0.05,
     keep_scores: bool = False,
+    token=None,
+    check_hub_access: bool = True,
 ) -> List[Dict[str, Any]]:
     """Grid evaluation: extractor x preprocessing x detector x dataset, plus each anomalib model x
     dataset (``anomalib_models``: names or ``{"name": "patchcore", "backbone": ...}`` specs).
@@ -132,6 +134,11 @@ def benchmark(
       * ``keep_scores``: store per-image ``scores`` and ``labels`` in each row (needed for paired tests
         such as :func:`imgad.stats.delong_vs_baseline`).
 
+    Gated / private Hub models: ``token`` is passed to the extractors (otherwise ``HF_TOKEN`` or the
+    stored login are used; see :mod:`imgad.hub`). With ``check_hub_access`` (default) access to every
+    Hub model is checked before any work starts, and a :class:`imgad.hub.GatedModelError` lists what
+    to do for each model that cannot be loaded.
+
     Returns a list of result rows (``pandas.DataFrame(rows)`` for a table); analyse them with
     :mod:`imgad.stats`.
     """
@@ -152,10 +159,12 @@ def benchmark(
                               "detector": n_feat, "anomalib": n_anom})
     _log_plan(logger, extractors, preprocessings, detectors, anomalib_models, datasets, seeds, n_feat, n_anom,
               train_subsample, bootstrap)
+    if check_hub_access:
+        _check_hub_access(extractors, token)
 
     for i_ext, ext in enumerate(extractors, 1):
         with step(f"Extractor {i_ext}/{len(extractors)}: building {_spec_name(ext)}", logging.INFO) as st:
-            ext = ext if isinstance(ext, FeatureExtractor) else build_extractor(ext)
+            ext = ext if isinstance(ext, FeatureExtractor) else build_extractor(ext, token=token)
             if hasattr(ext, "_load"):
                 logger.info(f"  loading model weights ({getattr(ext, 'model_name', '')} on {getattr(ext, 'device', '?')})")
                 ext._load()
@@ -226,6 +235,31 @@ def benchmark(
                 _log_run(logger, prog, row, dt)
     _log_end(logger, prog, rows)
     return rows
+
+
+def _hub_name(spec) -> Optional[str]:
+    """Hub id of an extractor spec (str, dict or instance), if it loads from the Hub."""
+    if isinstance(spec, str):
+        return spec
+    if isinstance(spec, dict):
+        return spec.get("model_name") if spec.get("type", "hf") in ("hf", "open_clip") else None
+    return getattr(spec, "model_name", None)
+
+
+def _check_hub_access(extractors, token) -> None:
+    from .hub import GatedModelError, check_models
+
+    names = [n for n in map(_hub_name, extractors) if n]
+    if not names:
+        return
+    with step(f"Checking access to {len(names)} Hugging Face model(s)", logging.INFO):
+        statuses = check_models(names, token)
+    for st in statuses:
+        level = logging.INFO if st.ok else logging.ERROR
+        logger.log(level, f"  {st.repo_id}: {st.state}" + (f" (user {st.user})" if st.user else ""))
+    bad = [st for st in statuses if not st.ok]
+    if bad:
+        raise GatedModelError("Some Hugging Face models cannot be accessed:\n\n" + "\n\n".join(st.explain() for st in bad))
 
 
 def _spec_name(spec) -> str:

@@ -110,6 +110,34 @@ often capture local defects better than the more semantic last layer.
 For **open_clip** checkpoints (`hf-hub:laion/...`, EVA-CLIP, DataComp…):
 `OpenCLIPFeatureExtractor("hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K")`.
 
+### Gated and private models on the Hugging Face Hub
+
+Some models (e.g. DINOv3) are **gated**: accept their conditions on the model page and authenticate
+with an [access token](https://huggingface.co/settings/tokens). imgad uses, in this order: an explicit
+token (`token=` / `--hf-token-file`), the `HF_TOKEN` environment variable, or the token stored by
+`imgad hf-login` (same as `hf auth login`). Tokens are **never** saved in `.joblib` files, configs,
+feature-cache keys, reports or logs.
+
+```bash
+imgad hf-login                                            # paste the token (input hidden)
+imgad hf-check facebook/dinov3-vitb16-pretrain-lvd1689m   # access status and what to do
+imgad hf-check --config configs/mvtec_benchmark.yaml      # every Hub model of a benchmark
+imgad benchmark --config cfg.yaml --hf-token-file ~/.hf_token   # or fit/predict/calibrate
+```
+
+```python
+HFFeatureExtractor("facebook/dinov3-vitb16-pretrain-lvd1689m", token=my_token)
+AnomalyPredictor.load("model.joblib", token=my_token)      # the token is not stored in the file
+benchmark(..., token=my_token)                            # checks access to every Hub model first
+```
+
+- A benchmark checks access to all its Hub models **before** doing any work and lists, for each model
+  that cannot be loaded, what to do (accept the conditions, log in, replace a rejected token…).
+- If you have no access but the model is already in the local Hugging Face cache, it is loaded from the
+  cache (with a warning).
+- There is deliberately no `--hf-token VALUE` option: a token on the command line ends up in the shell
+  history and the process list.
+
 ## Detectors
 
 All detectors share the same API (`fit`, `score`, `predict`) and the convention **higher score = more
@@ -351,6 +379,10 @@ imgad info --model bottle_cal.joblib         # configuration, threshold and meta
 
 imgad benchmark --config configs/mvtec_benchmark.yaml --out results.csv --report report/ --log-file run.log
 
+# gated Hugging Face models (see "Gated and private models")
+imgad hf-login
+imgad hf-check facebook/dinov3-vitb16-pretrain-lvd1689m
+
 # Anomalib models: -p sets the model kwargs; predict saves heatmaps and masks
 imgad fit --anomalib patchcore -p backbone=wide_resnet50_2 "layers=[layer2,layer3]" \
           --image-size 256 --train data/bottle/train/good --out bottle_pc.joblib
@@ -384,7 +416,7 @@ src/imgad/
   detectors/     base.py (interface, registry, calibration) · classical.py
   anomalib_backend.py (AnomalibPipeline) · maps.py (masks, heatmaps)
   preprocessing.py · pipeline.py · inference.py · data.py · evaluation.py · stats.py · report.py
-  progress.py (logging, ETA) · cli.py
+  progress.py (logging, ETA) · hub.py (gated models, tokens) · cli.py
 configs/         example benchmark YAML files
 examples/        quickstart.py · inference.py · compare_models.py · extending.py · anomalib_models.py
 benchmarks/      example benchmark results

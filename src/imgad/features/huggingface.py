@@ -21,13 +21,16 @@ more local detail than the final, semantically-aligned layer.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
+from ..hub import GatedModelError, hub_error, is_cached, pop_token_kwargs, raise_if_hub_error
 from ..utils import resolve_device
 from .base import FeatureExtractor, register_extractor
 
+logger = logging.getLogger("imgad.features")
 _POOLINGS = {"auto", "projection", "pooler", "cls", "mean", "cls+mean"}
 
 
@@ -46,6 +49,7 @@ class HFFeatureExtractor(FeatureExtractor):
         trust_remote_code: bool = False,
         image_size: Optional[int] = None,
         hf_kwargs: Optional[Dict[str, Any]] = None,
+        token: Union[None, bool, str] = None,
     ):
         if pooling not in _POOLINGS:
             raise ValueError(f"pooling must be one of {_POOLINGS}, got {pooling!r}")
@@ -60,6 +64,9 @@ class HFFeatureExtractor(FeatureExtractor):
         self.trust_remote_code = trust_remote_code
         self.image_size = image_size
         self.hf_kwargs = dict(hf_kwargs or {})
+        # access token for gated/private models: kept out of get_config(), so it is never saved
+        tok = pop_token_kwargs(self.hf_kwargs)
+        self._token = token if token is not None else tok
         self._model = None
         self._processor = None
 
@@ -71,6 +78,8 @@ class HFFeatureExtractor(FeatureExtractor):
         from transformers import AutoImageProcessor, AutoModel, AutoProcessor
 
         kw = dict(revision=self.revision, trust_remote_code=self.trust_remote_code, **self.hf_kwargs)
+        if self._token is not None:
+            kw["token"] = self._token
         torch_dtype = getattr(torch, self.dtype) if isinstance(self.dtype, str) else self.dtype
         load_kw = dict(kw)
         if torch_dtype is not None:
@@ -79,12 +88,14 @@ class HFFeatureExtractor(FeatureExtractor):
 
             key = "dtype" if Version(transformers.__version__) >= Version("4.56") else "torch_dtype"
             load_kw[key] = torch_dtype
-        model = AutoModel.from_pretrained(self.model_name, **load_kw)
+        model = self._from_pretrained(AutoModel, load_kw)
         model.eval().to(self.device)
         try:
-            processor = AutoImageProcessor.from_pretrained(self.model_name, **kw)
+            processor = self._from_pretrained(AutoImageProcessor, kw)
+        except GatedModelError:
+            raise
         except Exception:
-            processor = AutoProcessor.from_pretrained(self.model_name, **kw)
+            processor = self._from_pretrained(AutoProcessor, kw)
             processor = getattr(processor, "image_processor", processor)
         self._model, self._processor = model, processor
 
@@ -96,6 +107,21 @@ class HFFeatureExtractor(FeatureExtractor):
         if pooling == "projection" and self.layer is not None:
             raise ValueError("`layer` cannot be combined with pooling='projection'.")
         self._pooling = pooling
+
+    def _from_pretrained(self, auto_cls, kw: Dict[str, Any]):
+        """``auto_cls.from_pretrained`` with clear errors for gated/private models. Without access but with
+        the files in the local cache, it loads them without contacting the Hub (otherwise optional files
+        that are not cached trigger a 401 and abort the load)."""
+        try:
+            return auto_cls.from_pretrained(self.model_name, **kw)
+        except Exception as e:
+            if not (hub_error(e) and not kw.get("local_files_only") and is_cached(self.model_name)):
+                raise_if_hub_error(e, self.model_name, self._token)
+                raise
+        if not getattr(self, "_warned_cache", False):
+            logger.warning(f"{self.model_name}: no access with the current credentials; using the local Hugging Face cache")
+            self._warned_cache = True
+        return auto_cls.from_pretrained(self.model_name, **{**kw, "local_files_only": True})
 
     @property
     def model(self):
@@ -155,6 +181,11 @@ class HFFeatureExtractor(FeatureExtractor):
         layers = self.layer if isinstance(self.layer, list) else [self.layer]
         mode = "cls" if self._pooling == "pooler" else self._pooling
         return torch.cat([_token_pool(out.hidden_states[l], mode) for l in layers], dim=-1)
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state["_token"] = None  # pickles (e.g. sent to worker processes) never carry the access token
+        return state
 
     def get_config(self) -> Dict[str, Any]:
         return dict(
