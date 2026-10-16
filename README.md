@@ -1,5 +1,8 @@
 # imgad — Detección de anomalías en imágenes con modelos fundacionales + algoritmos clásicos (+ Anomalib)
 
+[![CI](https://github.com/joheras/imgad/actions/workflows/ci.yml/badge.svg)](https://github.com/joheras/imgad/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Framework modular para detección de anomalías a nivel de imagen en el escenario **one-class**
 (se entrena solo con imágenes normales):
 
@@ -309,3 +312,7 @@ tests/           pytest (sin conexión: CLIP diminuto generado localmente; ResNe
 - PatchCore nativo sobre features de parche de modelos fundacionales (CLIP/DINOv2) para comparar con el de anomalib (CNN).
 - Aumentado de datos en test (TTA) y agregación multi-escala.
 - Barrido few-shot (`train_subsample` = 1, 2, 4, 8… imágenes) reutilizando las semillas y los tests de `imgad.stats`.
+
+## Licencia
+
+Distribuido bajo la licencia [Apache 2.0](LICENSE).
