@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (py${{ matrix.python }}${{ matrix.anomalib && ', anomalib' || '' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.10"
+            anomalib: false
+          - python: "3.12"
+            anomalib: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # CPU-only PyTorch: much smaller than the default CUDA wheels
+      - name: Install PyTorch (CPU)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install imgad
+        run: |
+          extras="dev"
+          if [ "${{ matrix.anomalib }}" = "true" ]; then extras="dev,anomalib"; fi
+          pip install -e ".[${extras}]" matplotlib
+
+      - name: Show versions
+        run: python -c "import torch, transformers, sklearn; print(torch.__version__, transformers.__version__, sklearn.__version__)"
+
+      # Tests run offline: a tiny CLIP is generated locally and anomalib models use untrained backbones.
+      # Without anomalib, tests/test_anomalib.py is skipped.
+      - name: Run tests
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: pytest -q -rs
