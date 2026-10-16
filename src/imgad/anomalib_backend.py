@@ -34,6 +34,7 @@ from tqdm.auto import tqdm
 
 from .maps import MaskLike, load_mask
 from .pipeline import ThresholdMixin
+from .progress import step
 from .utils import ImageLike, as_list, load_image, resolve_device
 
 _FORMAT_VERSION = 1
@@ -294,9 +295,14 @@ class AnomalibPipeline(ThresholdMixin):
             from lightning.pytorch import seed_everything
 
             seed_everything(self.seed, verbose=False)
-        self.model = self._build_model()
-        self._train(train, show_progress)
-        self._calibrate_from_normals(cal, show_progress)
+        with step(f"  building {self.model_name} ({', '.join(f'{k}={v}' for k, v in self.model_kwargs.items()) or 'defaults'})"):
+            self.model = self._build_model()
+        epochs = f", max_epochs={self.max_epochs}" if self.max_epochs else ""
+        with step(f"  training {self.model_name} on {len(train)} normal images (device {self._device}{epochs})", logging.INFO):
+            self._train(train, show_progress)
+        src = f"{len(cal)} held-out" if n_cal else f"{len(cal)} training"
+        with step(f"  calibrating image/pixel thresholds on {src} normal images", logging.INFO):
+            self._calibrate_from_normals(cal, show_progress)
         self.metadata.update(
             n_train=len(train),
             n_calibration=len(cal) if n_cal else 0,

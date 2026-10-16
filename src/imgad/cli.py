@@ -174,9 +174,8 @@ def cmd_benchmark(args):
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
+    _setup_progress(args)
     datasets = _datasets_from_config(cfg)
-    for d in datasets:
-        print(d.summary())
     seeds = args.seeds if args.seeds is not None else cfg.get("seeds", [0])
     bootstrap = args.bootstrap if args.bootstrap is not None else cfg.get("bootstrap", 0)
     subsample = args.train_subsample if args.train_subsample is not None else cfg.get("train_subsample")
@@ -192,6 +191,7 @@ def cmd_benchmark(args):
         bootstrap=bootstrap,
         ci_alpha=cfg.get("ci_alpha", 0.05),
         keep_scores=bool(args.scores_out or args.report),
+        verbose=not args.quiet,
     )
     if args.out:
         _write_csv(rows, args.out)
@@ -249,11 +249,30 @@ def _print_stats(rows, metric: str, alpha: float, cd_plot, out, baseline=None) -
         print(f"Report -> {out}")
 
 
+def _setup_progress(args) -> None:
+    """Console verbosity: -q = warnings only (no progress bars), default = phases and runs, -v = every step.
+    --log-file always receives the full DEBUG log."""
+    import logging
+
+    from imgad.progress import setup_logging
+
+    level = logging.WARNING if args.quiet else logging.DEBUG if args.verbose else logging.INFO
+    setup_logging(level, log_file=args.log_file)
+
+
+def _add_progress_args(p) -> None:
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("-q", "--quiet", action="store_true", help="only warnings and errors (no progress bars)")
+    g.add_argument("-v", "--verbose", action="store_true", help="log every step (fit, score, cache, timings)")
+    p.add_argument("--log-file", default=None, help="also write the full (DEBUG) log with timestamps to this file")
+
+
 def cmd_report(args):
     import joblib
 
     from imgad.report import generate_report
 
+    _setup_progress(args)
     rows = joblib.load(args.scores)
     cfg, datasets = None, []
     if args.config:
@@ -345,6 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--report", default=None, metavar="DIR",
                    help="write a markdown report (data analysis, methods, results with figures, discussion) to DIR")
     b.add_argument("--report-title", default=None)
+    _add_progress_args(b)
     b.set_defaults(func=cmd_benchmark)
 
     rp = sub.add_parser("report", help="Build the markdown report from a benchmark --scores-out file")
@@ -354,6 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--title", default=None)
     rp.add_argument("--metric", default="auroc")
     rp.add_argument("--alpha", type=float, default=0.05)
+    _add_progress_args(rp)
     rp.set_defaults(func=cmd_report)
 
     st = sub.add_parser("stats", help="Statistical comparison of benchmark results (ranks, Friedman, Nemenyi, Wilcoxon, DeLong)")

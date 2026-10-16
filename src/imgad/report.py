@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from .progress import logger
 from .stats import compare_configs, delong_test, md_escape
 
 METRIC_NAMES = {
@@ -88,12 +89,15 @@ def generate_report(
     fig_dir = out / "figures"
     out.mkdir(parents=True, exist_ok=True)
     plt = _pyplot() if figures else None
+    if figures and plt is None:
+        logger.warning("matplotlib is not installed: the report will have tables only (pip install \"imgad[report]\")")
     if plt is not None:
         fig_dir.mkdir(exist_ok=True)
     r = _Report(rows, list(datasets), metric, alpha, out, fig_dir, plt)
     md = r.build(title, config, command)
     path = out / "report.md"
     path.write_text(md)
+    logger.info(f"Report written: {path} ({len(r.figs)} figures)")
     _write_csv(rows, out / "results.csv")
     if config is not None:
         import yaml
@@ -188,7 +192,8 @@ class _Report:
         return float(np.std(v, ddof=1)) if len(v) > 1 else float("nan")
 
     def mean(self, cfg: str, metric: Optional[str] = None) -> float:
-        return float(np.nanmean([self.val(d, cfg, metric) for d in self.ds_names]))
+        v = [x for x in (self.val(d, cfg, metric) for d in self.ds_names) if not np.isnan(x)]
+        return float(np.mean(v)) if v else float("nan")
 
     def label(self, cfg: str) -> str:
         m = self.meta[cfg]
@@ -202,6 +207,7 @@ class _Report:
 
     def save(self, fig, name: str, caption: str) -> str:
         path = self.fig_dir / f"{name}.png"
+        logger.debug(f"  figure {path.name}")
         fig.savefig(path, dpi=130)
         self.plt.close(fig)
         rel = f"figures/{name}.png"
@@ -212,6 +218,7 @@ class _Report:
     def build(self, title, config, command) -> str:
         if not self.raw:
             return "# Benchmark report\n\nNo results.\n"
+        logger.info("Report: statistical tests")
         self._stats = self._run_stats()
         body: List[str] = []
         sections = [
@@ -224,6 +231,7 @@ class _Report:
             ("Appendix: results per dataset", self.sec_annex),
         ]
         for name, fn in sections:
+            logger.info(f"Report: {name.lower()}")
             lines = fn()
             if lines:
                 body += [f"## {name}", "", *lines, ""]
