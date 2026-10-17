@@ -261,11 +261,14 @@ never stored or logged. Scores of volume slices are per slice; aggregate them pe
 The rule is part of the feature-cache key and of saved pipelines.
 
 **Medical model zoo.** `imgad models --modality histopathology` recommends feature extractors per modality
-(RAD-DINO, MedSigLIP, BiomedCLIP, UNI/UNI2-h, Virchow2, H-optimus-0, Prov-GigaPath, Phikon-v2 + general
-baselines), with access and license; use them as `build_extractor("zoo:rad-dino")` or `- zoo:uni` in a
-benchmark YAML (`--yaml` prints the block). Pathology models load through the new `timm` extractor. See the
+(RAD-DINO, MedSigLIP, BiomedCLIP, UNI/UNI2-h, Virchow2, H-optimus-0, Prov-GigaPath, Phikon-v2; for the eye
+RETFound, RETFound-Green, VisionFM, RetiZero, FLAIR and UrFound; + general baselines), with access and
+license; use them as `build_extractor("zoo:rad-dino")` or `- zoo:uni` in a benchmark YAML (`--yaml` prints the
+block). Pathology and retinal models load through the `timm` extractor, which also loads raw checkpoints
+(`checkpoint="hf-hub:…/file.pth"`, a URL or `gdrive:<id>/<name>`) without executing code. See the
 [documentation](https://joheras.github.io/imgad/medical/) for medical foundation models, benchmarks and
-evaluation practices.
+evaluation practices, and the [ophthalmology page](https://joheras.github.io/imgad/ophthalmology/) for
+fundus and OCT.
 
 ## Evaluation and benchmarks
 

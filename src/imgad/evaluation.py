@@ -292,9 +292,14 @@ def _hub_name(spec) -> Optional[str]:
         return get(spec).hub_id
     if isinstance(spec, str):
         return spec
+    if isinstance(spec, dict) and str(spec.get("checkpoint", "")).startswith(("hf-hub:", "hf_hub:")):
+        return "hf-hub:" + "/".join(spec["checkpoint"].split(":", 1)[1].split("/")[:2])
     if isinstance(spec, dict):
         name = spec.get("model_name") if spec.get("type", "hf") in ("hf", "open_clip", "timm") else None
         return name.replace("hf_hub:", "hf-hub:") if isinstance(name, str) else name
+    ckpt = getattr(spec, "checkpoint", None)
+    if isinstance(ckpt, str) and ckpt.startswith(("hf-hub:", "hf_hub:")):
+        return "hf-hub:" + "/".join(ckpt.split(":", 1)[1].split("/")[:2])
     name = getattr(spec, "model_name", None)
     return name.replace("hf_hub:", "hf-hub:") if isinstance(name, str) else name
 

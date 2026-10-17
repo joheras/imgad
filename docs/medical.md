@@ -105,8 +105,9 @@ ext = build_extractor("zoo:rad-dino")             # also `- zoo:rad-dino` in a b
 
 Modalities: `chest-xray`, `ct`, `mri`, `histopathology`, `dermatology`, `ophthalmology`, `oct`. Aliases such
 as `cxr`, `pathology` or `fundus` are accepted. Recommendations are ordered from specific to general:
-models trained on that modality only, then multi-modality medical models, then general baselines. They
-are a starting point to benchmark on your own data, not a quality ranking.
+domain models covering the fewest modalities first (models trained on that modality only, then broader
+medical models), then general baselines. They are a starting point to benchmark on your own data, not a
+quality ranking. Eye imaging (fundus and OCT) has its own page: [Ophthalmology](ophthalmology.md).
 
 | Name | Modalities | Access | License / terms | Dim | Notes |
 |---|---|---|---|---:|---|
@@ -119,6 +120,17 @@ are a starting point to benchmark on your own data, not a quality ranking.
 | `zoo:h-optimus-0` | histopathology | gated | Apache-2.0 | 1536 | ViT-g/14; expects 224×224 tiles at 0.5 µm/px (its own normalisation is applied by timm). |
 | `zoo:prov-gigapath` | histopathology | gated | Apache-2.0 | 1536 | Tile encoder (ViT-g) of Prov-GigaPath. |
 | `zoo:phikon-v2` | histopathology | public | Owkin non-commercial license | 1024 | DINOv2 ViT-L/16 on ~456M tiles from 60k H&E slides (TCGA, CPTAC, GTEx…). Public, no request needed. |
+| `zoo:retfound-cfp` | ophthalmology | gated | CC-BY-NC-4.0 | 1024 | RETFound (MAE ViT-L/16), colour-fundus weights of the Nature paper. Embedding = mean patch token after the encoder norm; ImageNet normalisation, 224 px. |
+| `zoo:retfound-oct` | oct | gated | CC-BY-NC-4.0 | 1024 | RETFound (MAE ViT-L/16), OCT weights of the Nature paper (B-scans). |
+| `zoo:retfound-dinov2` | ophthalmology | gated | CC-BY-NC-4.0 | 1024 | RETFound retrained with DINOv2 (ViT-L/14, teacher weights) on part of the MEH AlzEye fundus cohort. |
+| `zoo:retfound-green` | ophthalmology | public | custom non-commercial licence | 384 | ViT-S/14 with 4 registers trained with token reconstruction on 75k public fundus images; 392 px, mean of patch tokens as in its README. Small (87 MB) and fast. Weights from the GitHub release. |
+| `zoo:flair` | ophthalmology | public | Apache-2.0 | 2048 | Vision tower (ResNet-50) of the FLAIR vision–language model, trained with expert text descriptions on 38 public fundus datasets (288k images). Inputs in [0, 1] at 512 px; average-pooled features before the text projection. |
+| `zoo:urfound` | ophthalmology, oct | public | MIT | 768 | One ViT-B/16 encoder for both fundus and OCT, trained with knowledge-guided masked modelling on ~180k retinal images. |
+| `zoo:retizero` | ophthalmology | public | no license file in the repository | 1024 | Vision–language model (RETFound ViT-L/16 image encoder with LoRA, merged at load time) trained on 341,896 fundus images with text covering 400+ fundus diseases. Class token, 224 px. Weights (1.6 GB) from Google Drive. |
+| `zoo:visionfm-fundus` | ophthalmology | public | CC-BY-NC-4.0 | 768 | VisionFM fundus encoder: iBOT ViT-B/16 (teacher weights), class token, with VisionFM's own fundus normalisation. Weights (1.5 GB) from Google Drive. |
+| `zoo:visionfm-oct` | oct | public | CC-BY-NC-4.0 | 768 | VisionFM OCT encoder (iBOT ViT-B/16, teacher weights) with VisionFM's OCT normalisation. VisionFM also releases FFA, slit-lamp, external-eye, ultrasound, UBM and MRI encoders (same recipe). |
+| `zoo:retfound-cfp-mirror` | ophthalmology | public | CC-BY-NC-4.0 | 1024 | Unofficial public copy of RETFound CFP weights in timm format (bitfount). Not verified against the official gated weights; prefer zoo:retfound-cfp when you have access. |
+| `zoo:retfound-oct-mirror` | oct | public | CC-BY-NC-4.0 | 1024 | Unofficial public copy of RETFound OCT weights in timm format (bitfount); not verified against the official weights. |
 | `zoo:dinov2-base` | general baseline | public | Apache-2.0 | 768 | Strong general self-supervised baseline. |
 | `zoo:dinov3-vitb16` | general baseline | gated | DINOv3 license | 768 | Newer self-supervised baseline (gated). |
 | `zoo:siglip2-base` | general baseline | public | Apache-2.0 | 768 | Vision–language baseline. |
@@ -127,14 +139,17 @@ The facts above come from each model card (checked when the zoo was written). Ve
 before relying on them, especially licenses and terms for any non-research use. `imgad hf-check` also shows
 the license declared in the model card.
 
-- **Gated models** (UNI, Virchow2, H-optimus-0, Prov-GigaPath, MedSigLIP, DINOv3) need you to request
+- **Gated models** (RETFound, UNI, Virchow2, H-optimus-0, Prov-GigaPath, MedSigLIP, DINOv3) need you to request
   access on their page and log in (`imgad hf-login`, see [Gated models](guide/gated-models.md)). Some, such
   as UNI and Virchow2, require an institutional e-mail.
 - **Pathology models** load through timm (`{"type": "timm", ...}`, installed with `imgad[medical]`), with the
   exact arguments from their model cards. Virchow2 uses the class token concatenated with the mean patch
   token, as its authors recommend.
-- **Not included:** CONCH (needs its own package) and RETFound (custom checkpoints). Add any model as a
-  `timm`/`hf` spec or [register your own extractor](guide/pipelines.md#extending).
+- **Raw checkpoints** (RETFound, VisionFM, RetiZero, FLAIR…) are loaded into a timm architecture with
+  `checkpoint` / `checkpoint_key` / `checkpoint_prefix` and their own preprocessing (`data_config`); see
+  [Ophthalmology](ophthalmology.md#2-foundation-models). Checkpoints are read without executing code.
+- **Not included:** CONCH (needs its own package). Add any model as a `timm`/`hf` spec or
+  [register your own extractor](guide/pipelines.md#extending).
 
 !!! tip "Lesions are local"
     A single global embedding per image dilutes small findings, as it does with small industrial defects.

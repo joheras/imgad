@@ -205,7 +205,7 @@ def is_cached(repo_id: str) -> bool:
 
         for repo in scan_cache_dir().repos:
             if repo.repo_id == repo_id and repo.repo_type == "model":
-                return any(f.file_name.endswith((".safetensors", ".bin")) for rev in repo.revisions for f in rev.files)
+                return any(f.file_name.endswith((".safetensors", ".bin", ".pth", ".pt")) for rev in repo.revisions for f in rev.files)
     except Exception:
         pass
     return False
