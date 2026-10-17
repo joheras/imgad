@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Jónathan Heras" }]
 keywords = [
     "anomaly-detection", "one-class", "computer-vision", "foundation-models", "clip", "dinov2",
-    "anomalib", "patchcore", "mvtec", "benchmark",
+    "anomalib", "patchcore", "mvtec", "benchmark", "medical-imaging", "dicom",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -28,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 dependencies = [
     "numpy>=1.23",
@@ -45,6 +46,7 @@ dependencies = [
 Homepage = "https://github.com/joheras/imgad"
 Repository = "https://github.com/joheras/imgad"
 Issues = "https://github.com/joheras/imgad/issues"
+Documentation = "https://joheras.github.io/imgad/"
 
 [project.optional-dependencies]
 open_clip = ["open_clip_torch>=2.20"]
@@ -52,8 +54,11 @@ pyod = ["pyod>=1.1"]
 pandas = ["pandas>=1.5"]
 anomalib = ["anomalib>=2.0"]
 report = ["matplotlib>=3.5"]
+medical = ["pydicom>=2.4", "nibabel>=5"]
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26"]
 dev = ["pytest>=7", "matplotlib>=3.5", "build", "twine"]
-all = ["open_clip_torch>=2.20", "pyod>=1.1", "pandas>=1.5", "anomalib>=2.0", "matplotlib>=3.5", "pytest>=7"]
+all = ["open_clip_torch>=2.20", "pyod>=1.1", "pandas>=1.5", "anomalib>=2.0", "matplotlib>=3.5", "pydicom>=2.4",
+       "nibabel>=5", "pytest>=7"]
 
 [project.scripts]
 imgad = "imgad.cli:main"

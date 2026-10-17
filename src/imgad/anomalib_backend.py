@@ -107,8 +107,8 @@ def _accelerator(device: str) -> Tuple[str, Any]:
 class _Images(Dataset):
     """Loads and resizes images to the model input size; returns (CHW float tensor in [0,1], (h, w))."""
 
-    def __init__(self, images: Sequence[ImageLike], size: Tuple[int, int], as_item: bool = False):
-        self.images, self.size, self.as_item = list(images), size, as_item
+    def __init__(self, images: Sequence[ImageLike], size: Tuple[int, int], as_item: bool = False, intensity="auto"):
+        self.images, self.size, self.as_item, self.intensity = list(images), size, as_item, intensity
 
     def __len__(self):
         return len(self.images)
@@ -116,7 +116,7 @@ class _Images(Dataset):
     def __getitem__(self, i):
         from PIL import Image
 
-        img = load_image(self.images[i])
+        img = load_image(self.images[i], self.intensity)
         orig = (img.height, img.width)
         img = img.resize((self.size[1], self.size[0]), Image.BILINEAR)
         x = torch.from_numpy(np.asarray(img, dtype=np.float32) / 255.0).permute(2, 0, 1).contiguous()
@@ -150,6 +150,8 @@ class AnomalibPipeline(ThresholdMixin):
     batch_size / train_batch_size: inference / training batch sizes (``efficient_ad`` trains with 1)
     max_epochs:        epochs for trainable models (ignored by PatchCore/PaDiM, which use 1)
     trainer_kwargs:    extra ``lightning.Trainer`` arguments (e.g. ``{"max_steps": 1000}``)
+    intensity:         rule mapping images with more than 8 bits (16-bit, DICOM...) to 8 bits; see
+                       :mod:`imgad.imageio`
     **model_kwargs:    passed to the anomalib model, e.g. ``backbone="resnet18"``,
                        ``layers=["layer2", "layer3"]``, ``coreset_sampling_ratio=0.01``
     """
@@ -169,6 +171,7 @@ class AnomalibPipeline(ThresholdMixin):
         max_epochs: Optional[int] = None,
         seed: Optional[int] = 0,
         trainer_kwargs: Optional[Dict[str, Any]] = None,
+        intensity: str = "auto",
         **model_kwargs,
     ):
         _require_anomalib()
@@ -183,6 +186,9 @@ class AnomalibPipeline(ThresholdMixin):
         self.max_epochs = max_epochs
         self.seed = seed
         self.trainer_kwargs = dict(trainer_kwargs or {})
+        from .imageio import intensity_str
+
+        self.intensity = intensity_str(intensity)
         self.model_kwargs = model_kwargs
         self.threshold_: Optional[float] = None
         self.train_scores_: Optional[np.ndarray] = None
@@ -219,7 +225,7 @@ class AnomalibPipeline(ThresholdMixin):
         from anomalib.engine import Engine
 
         bs = self.train_batch_size or (1 if self.model_name.replace("_", "").lower() == "efficientad" else self.batch_size)
-        ds = _Images(images, self.image_size, as_item=True)
+        ds = _Images(images, self.image_size, as_item=True, intensity=self.intensity)
         from anomalib.data import ImageBatch
 
         loader = DataLoader(ds, batch_size=bs, shuffle=True, num_workers=self.num_workers, collate_fn=ImageBatch.collate)
@@ -249,7 +255,7 @@ class AnomalibPipeline(ThresholdMixin):
         dev = self._device
         model = self.model.to(dev).eval()
         loader = DataLoader(
-            _Images(items, self.image_size), batch_size=self.batch_size, num_workers=self.num_workers, collate_fn=_collate_infer
+            _Images(items, self.image_size, intensity=self.intensity), batch_size=self.batch_size, num_workers=self.num_workers, collate_fn=_collate_infer
         )
         if show_progress and len(items) > self.batch_size:
             loader = tqdm(loader, desc=f"{self.model_name}")
@@ -399,6 +405,7 @@ class AnomalibPipeline(ThresholdMixin):
             "max_epochs": self.max_epochs,
             "seed": self.seed,
             "trainer_kwargs": self.trainer_kwargs,
+            "intensity": self.intensity,
             **self.model_kwargs,
         }
 

@@ -1,0 +1,89 @@
+site_name: imgad
+site_description: Image anomaly detection with foundation models, classical detectors and Anomalib — with statistical benchmarking and medical-imaging support
+site_url: https://joheras.github.io/imgad/
+repo_url: https://github.com/joheras/imgad
+repo_name: joheras/imgad
+edit_uri: edit/main/docs/
+copyright: Apache-2.0 · Partially supported by Agencia de Desarrollo Económico de La Rioja [ADER 2022-I-IDI-00015]
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - content.code.copy
+    - content.tabs.link
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - User guide:
+      - Feature pipelines: guide/pipelines.md
+      - Anomalib models and anomaly maps: guide/anomalib.md
+      - Inference and thresholds: guide/inference.md
+      - Data and image formats: guide/data.md
+      - Benchmarks: guide/benchmarks.md
+      - Statistical analysis: guide/statistics.md
+      - Benchmark reports: guide/reports.md
+      - Gated Hugging Face models: guide/gated-models.md
+      - Command line: guide/cli.md
+  - Medical imaging: medical.md
+  - API reference: api.md
+  - About: about.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: sphinx
+            show_source: false
+            show_root_heading: true
+            heading_level: 3
+            members_order: source
+            merge_init_into_class: true
+            show_signature_annotations: true
+            separate_signature: true
+            filters: ["!^_"]

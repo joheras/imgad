@@ -112,6 +112,7 @@ def benchmark(
     keep_scores: bool = False,
     token=None,
     check_hub_access: bool = True,
+    intensity: Optional[str] = None,
     n_jobs: int = 1,
     devices: Union[None, str, Sequence[str]] = None,
     gpu_jobs: Union[int, str] = "auto",
@@ -137,6 +138,8 @@ def benchmark(
         already configured (see :func:`imgad.progress.setup_logging`) and enables progress bars.
       * ``keep_scores``: store per-image ``scores`` and ``labels`` in each row (needed for paired tests
         such as :func:`imgad.stats.delong_vs_baseline`).
+      * ``intensity``: rule mapping images with more than 8 bits (16-bit, DICOM, NIfTI) to 8 bits for every
+        extractor and Anomalib model that does not set its own (see :mod:`imgad.imageio`).
 
     Gated / private Hub models: ``token`` is passed to the extractors (otherwise ``HF_TOKEN`` or the
     stored login are used; see :mod:`imgad.hub`). With ``check_hub_access`` (default) access to every
@@ -159,8 +162,8 @@ def benchmark(
     """
     ensure_console(verbose)
     rows: List[Dict[str, Any]] = []
-    extractors = list(extractors)
-    anomalib_models = list(anomalib_models)
+    extractors = [_with_intensity(e, intensity) for e in extractors]
+    anomalib_models = [_with_intensity(m, intensity, anomalib=True) for m in anomalib_models]
     datasets = list(datasets)
     detectors = list(detectors)
     preprocessings = list(preprocessings)
@@ -259,6 +262,22 @@ def extractor_label(ext: FeatureExtractor) -> str:
     if getattr(ext, "pooling", None) not in (None, "auto"):
         name += f"[{ext.pooling}" + (f"@{ext.layer}" if getattr(ext, "layer", None) is not None else "") + "]"
     return name
+
+
+def _with_intensity(spec, intensity, anomalib: bool = False):
+    """Apply a benchmark-wide intensity rule to a spec that does not set its own."""
+    if intensity is None:
+        return spec
+    if isinstance(spec, str):
+        return {"name": spec, "intensity": intensity} if anomalib else {"type": "hf", "model_name": spec,
+                                                                         "intensity": intensity}
+    if isinstance(spec, dict):
+        return spec if "intensity" in spec else {**spec, "intensity": intensity}
+    if isinstance(spec, FeatureExtractor) and spec.intensity == "auto":
+        import copy
+
+        return copy.copy(spec).set_intensity(intensity)
+    return spec
 
 
 def _hub_name(spec) -> Optional[str]:

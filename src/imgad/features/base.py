@@ -36,7 +36,8 @@ def list_extractors() -> List[str]:
 
 
 def build_extractor(config: Dict[str, Any] | str, token=None, **kwargs) -> "FeatureExtractor":
-    """Build an extractor from ``{"type": "hf", "model_name": ...}`` or a bare HF model id.
+    """Build an extractor from ``{"type": "hf", "model_name": ...}`` or a bare HF model id. The optional
+    key ``"intensity"`` sets the rule for images with more than 8 bits (see :mod:`imgad.imageio`).
     ``token``: Hugging Face access token for gated/private models (passed only to extractors that
     accept one; see :mod:`imgad.hub`)."""
     if isinstance(config, str):
@@ -46,9 +47,13 @@ def build_extractor(config: Dict[str, Any] | str, token=None, **kwargs) -> "Feat
     if kind not in _EXTRACTORS:
         raise KeyError(f"Unknown extractor type {kind!r}. Available: {list_extractors()}")
     cls = _EXTRACTORS[kind]
+    intensity = config.pop("intensity", None)
     if token is not None and "token" in inspect.signature(cls.__init__).parameters:
         config["token"] = token
-    return cls(**config)
+    ext = cls(**config)
+    if intensity is not None:
+        ext.set_intensity(intensity)
+    return ext
 
 
 class FeatureExtractor(ABC):
@@ -60,6 +65,7 @@ class FeatureExtractor(ABC):
 
     registry_name: str = "base"
     batch_size: int = 32
+    intensity: str = "auto"  # how images with more than 8 bits are mapped to 8 bits (imgad.imageio)
 
     @abstractmethod
     def _extract_batch(self, images: List) -> np.ndarray:
@@ -75,7 +81,25 @@ class FeatureExtractor(ABC):
         cfg = {"type": self.registry_name, **self.get_config()}
         cfg.pop("device", None)
         cfg.pop("batch_size", None)
+        if self.intensity != "auto":
+            cfg["intensity"] = self.intensity
         return json.dumps(cfg, sort_keys=True, default=str)
+
+    def set_intensity(self, intensity) -> "FeatureExtractor":
+        """Rule mapping images with more than 8 bits to 8 bits: ``"auto"``, ``"minmax"``, ``"dicom"``,
+        ``"percentile:1,99"`` or ``"window:lo,hi"`` (see :mod:`imgad.imageio`)."""
+        from ..imageio import intensity_str
+
+        self.intensity = intensity_str(intensity)
+        return self
+
+    def full_config(self) -> Dict[str, Any]:
+        """``{"type": ..., **get_config()}`` plus the intensity rule when it is not the default; this is what
+        saved pipelines store and :func:`build_extractor` accepts."""
+        cfg = {"type": self.registry_name, **self.get_config()}
+        if self.intensity != "auto":
+            cfg["intensity"] = self.intensity
+        return cfg
 
     def extract(
         self,
@@ -96,7 +120,7 @@ class FeatureExtractor(ABC):
         if show_progress and len(images) > self.batch_size:
             it = tqdm(it, total=(len(images) + self.batch_size - 1) // self.batch_size, desc="features")
         for batch in it:
-            pil = [load_image(x) for x in batch]
+            pil = [load_image(x, self.intensity) for x in batch]
             feats.append(np.asarray(self._extract_batch(pil), dtype=np.float32))
         if not feats:
             return np.zeros((0, 0), dtype=np.float32)
@@ -106,8 +130,12 @@ class FeatureExtractor(ABC):
         return Path(cache_dir) / hashlib.sha1(self.identifier.encode()).hexdigest()[:16]
 
     def _cache_key(self, d: Path, p) -> Path:
-        st = os.stat(p)
-        h = hashlib.sha1(f"{os.path.abspath(p)}|{st.st_mtime_ns}|{st.st_size}".encode()).hexdigest()
+        from ..imageio import split_ref
+
+        path, axis, index = split_ref(p)  # slice references: stat the file, keep the slice in the key
+        st = os.stat(path)
+        ref = f"::{axis}={index}" if axis is not None else ""
+        h = hashlib.sha1(f"{os.path.abspath(path)}{ref}|{st.st_mtime_ns}|{st.st_size}".encode()).hexdigest()
         return d / f"{h}.npy"
 
     def cached_count(self, images, cache_dir: Optional[str | os.PathLike]) -> int:

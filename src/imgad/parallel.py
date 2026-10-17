@@ -95,7 +95,8 @@ class _cuda_peak:
         return False
 
 
-def _extract_job(ext_cls, ext_cfg: Dict[str, Any], device: str, datasets, cache_dir, token=None) -> Dict[str, Any]:
+def _extract_job(ext_cls, ext_cfg: Dict[str, Any], device: str, datasets, cache_dir, token=None,
+                 intensity: str = "auto") -> Dict[str, Any]:
     """Load the extractor on ``device`` and extract train/test features for every dataset. ``token`` (gated
     Hub models) travels only through the process pipe; it is never part of the stored config."""
     t0 = time.time()
@@ -108,6 +109,7 @@ def _extract_job(ext_cls, ext_cfg: Dict[str, Any], device: str, datasets, cache_
     try:
         with _cuda_peak(device) as peak:
             ext = ext_cls(**cfg)
+            ext.set_intensity(intensity)
             if hasattr(ext, "_load"):
                 ext._load()
             t_load = time.time() - t0
@@ -193,7 +195,8 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
         cfg = ext.get_config()
         est = estimate_extractor_bytes(cfg, default_est) if not gpu_mem_gb else default_est
         pending.append(_Job(next(ids), "extract", ("extract", ext.identifier), f"features of {extractor_label(ext)}", est,
-                            {"cls": type(ext), "cfg": cfg, "name": extractor_label(ext), "i_ext": i_ext}))
+                            {"cls": type(ext), "cfg": cfg, "intensity": ext.intensity, "name": extractor_label(ext),
+                             "i_ext": i_ext}))
     for i_m, spec in enumerate(anomalib_models):
         for i_ds, ds in enumerate(datasets):
             for i_s, seed in enumerate(seeds):
@@ -222,7 +225,7 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
                 job.device, job.started = dev, time.time()
                 if job.kind == "extract":
                     fut = acc_pool.submit(_extract_job, job.payload["cls"], job.payload["cfg"], dev, datasets, cache_dir,
-                                          token)
+                                          token, job.payload["intensity"])
                 else:
                     p = job.payload
                     fut = acc_pool.submit(_anomalib_job, p["spec"], p["ds"], p["seed"], train_subsample, opts, dev)

@@ -89,6 +89,8 @@ def cmd_fit(args):
     from imgad import AnomalyDetectionPipeline
 
     ext = {"type": args.extractor_type, "model_name": args.model, "batch_size": args.batch_size, **_kv(args.ext_param)}
+    if args.intensity:
+        ext["intensity"] = args.intensity
     token = _token(args)
     if token is not None:
         ext["token"] = token  # used to download the model; never saved
@@ -107,6 +109,8 @@ def _fit_anomalib(args, paths):
     from imgad import AnomalibPipeline
 
     kw = {"batch_size": args.batch_size, "device": args.device, **_kv(args.param)}
+    if args.intensity:
+        kw["intensity"] = args.intensity
     if args.image_size:
         kw["image_size"] = args.image_size
     if args.max_epochs:
@@ -214,6 +218,7 @@ def cmd_benchmark(args):
         ci_alpha=cfg.get("ci_alpha", 0.05),
         keep_scores=bool(args.scores_out or args.report),
         verbose=not args.quiet,
+        intensity=args.intensity or cfg.get("intensity"),
         token=_token(args),
         **_parallel_kwargs(args, cfg),
     )
@@ -430,6 +435,8 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--batch-size", type=int, default=32)
     f.add_argument("--device", default=None)
     f.add_argument("--cache-dir", default=None)
+    f.add_argument("--intensity", default=None,
+                   help="images with >8 bits (16-bit, DICOM, NIfTI): auto | minmax | dicom | percentile:1,99 | window:lo,hi")
     _add_token_arg(f)
     f.set_defaults(func=cmd_fit)
 
@@ -479,6 +486,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--report", default=None, metavar="DIR",
                    help="write a markdown report (data analysis, methods, results with figures, discussion) to DIR")
     b.add_argument("--report-title", default=None)
+    b.add_argument("--intensity", default=None,
+                   help="rule for images with >8 bits for every model (overrides `intensity:` in the YAML)")
     _add_progress_args(b)
     g = b.add_argument_group("parallel execution (default: sequential)")
     g.add_argument("-j", "--jobs", type=int, default=None, help="CPU worker processes for detector runs (-1 = all cores)")
