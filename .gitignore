@@ -4,3 +4,5 @@ __pycache__/
 .feature_cache/
 *.joblib
 results/
+site/
+.claude/
