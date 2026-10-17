@@ -18,6 +18,14 @@ train_subsample: 0.8          # per seed, 80% of the normal training images (wit
 bootstrap: 1000               # 95% CI of AUROC/AUPR by resampling the test set (0 = off)
 ci_alpha: 0.05
 
+# Parallel execution (omit for a sequential run; see "Parallel benchmarks" in the README).
+# CLI flags (-j, --devices, --gpu-jobs, --gpu-mem-gb) override these values.
+# parallel:
+#   jobs: 8              # CPU worker processes for detector runs (-1 = all cores)
+#   devices: auto        # GPUs for feature extraction / anomalib models: auto | cpu | cuda:0,cuda:1
+#   gpu_jobs: auto       # max concurrent jobs per GPU (auto: as many as fit in memory, up to 4)
+#   gpu_mem_gb: 4        # memory assumed for jobs of unknown size (default: from the checkpoint size)
+
 extractors:
   - {type: hf, model_name: openai/clip-vit-base-patch16}
   - {type: hf, model_name: openai/clip-vit-large-patch14}

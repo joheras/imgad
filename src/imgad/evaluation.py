@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from sklearn.metrics import average_precision_score, f1_score, precision_recall_curve, roc_auc_score, roc_curve
@@ -112,6 +112,10 @@ def benchmark(
     keep_scores: bool = False,
     token=None,
     check_hub_access: bool = True,
+    n_jobs: int = 1,
+    devices: Union[None, str, Sequence[str]] = None,
+    gpu_jobs: Union[int, str] = "auto",
+    gpu_mem_gb: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Grid evaluation: extractor x preprocessing x detector x dataset, plus each anomalib model x
     dataset (``anomalib_models``: names or ``{"name": "patchcore", "backbone": ...}`` specs).
@@ -139,11 +143,20 @@ def benchmark(
     Hub model is checked before any work starts, and a :class:`imgad.hub.GatedModelError` lists what
     to do for each model that cannot be loaded.
 
+    Parallel execution (see :mod:`imgad.parallel`; results are identical to the sequential run):
+      * ``n_jobs``: CPU worker processes for the detector runs (-1 = all cores). ``1`` together with
+        ``devices=None`` runs everything sequentially in this process.
+      * ``devices``: where feature extraction and Anomalib models run: ``"auto"`` (every GPU, or the
+        CPU), ``"cpu"``, ``"cuda:0,cuda:1"`` or a list. Each extractor is loaded once in a worker
+        process and its detector runs start on the CPU pool as soon as its features are ready.
+      * ``gpu_jobs``: maximum concurrent jobs per GPU (``"auto"``: as many as fit in memory, up to 4).
+      * ``gpu_mem_gb``: memory assumed for a job whose needs are unknown (default: estimated from the
+        checkpoint size for Hub models, 4 GiB otherwise); after the first run of a model its measured
+        peak is used. A job starts only when it fits in the free memory of a device.
+
     Returns a list of result rows (``pandas.DataFrame(rows)`` for a table); analyse them with
     :mod:`imgad.stats`.
     """
-    import copy
-
     ensure_console(verbose)
     rows: List[Dict[str, Any]] = []
     extractors = list(extractors)
@@ -161,6 +174,13 @@ def benchmark(
               train_subsample, bootstrap)
     if check_hub_access:
         _check_hub_access(extractors, token)
+    if n_jobs != 1 or devices is not None:
+        from .parallel import run_parallel
+
+        rows = run_parallel(extractors, detectors, datasets, preprocessings, anomalib_models, seeds, train_subsample,
+                            opts, cache_dir, n_jobs, devices, gpu_jobs, gpu_mem_gb, prog, token=token)
+        _log_end(logger, prog, rows)
+        return rows
 
     for i_ext, ext in enumerate(extractors, 1):
         with step(f"Extractor {i_ext}/{len(extractors)}: building {_spec_name(ext)}", logging.INFO) as st:
@@ -169,9 +189,7 @@ def benchmark(
                 logger.info(f"  loading model weights ({getattr(ext, 'model_name', '')} on {getattr(ext, 'device', '?')})")
                 ext._load()
         prog.add("load", st.seconds)
-        ext_name = getattr(ext, "model_name", type(ext).__name__)
-        if getattr(ext, "pooling", None) not in (None, "auto"):
-            ext_name += f"[{ext.pooling}" + (f"@{ext.layer}" if getattr(ext, "layer", None) is not None else "") + "]"
+        ext_name = extractor_label(ext)
         for i_ds, ds in enumerate(datasets, 1):
             n_img = len(ds.train_paths) + len(ds.test_paths)
             cached = ext.cached_count(list(ds.train_paths) + list(ds.test_paths), cache_dir)
@@ -184,41 +202,10 @@ def benchmark(
             prog.add("extract", t_feat)
             logger.info(f"  features: {Xtr_all.shape[1]}-d, {fmt_duration(t_feat)} · {prog.timing()}")
             for seed in seeds:
-                idx = _subsample(len(Xtr_all), train_subsample, seed)
-                Xtr = Xtr_all[idx]
                 for pp in preprocessings:
-                    pp_name = "+".join(map(str, pp)) if pp else "-"
-                    with step(f"preprocessing {pp_name} (seed {seed}, {len(Xtr)} training images)"):
-                        prep = build_preprocessing(pp)
-                        Ztr = prep.fit_transform(Xtr) if prep is not None else Xtr
-                        Zte = prep.transform(Xte) if prep is not None else Xte
                     for det_spec in detectors:
-                        det = (
-                            copy.deepcopy(det_spec)
-                            if isinstance(det_spec, BaseDetector)
-                            else build_detector(det_spec)
-                        )
-                        _seed_detector(det, det_spec, seed)
-                        row = {
-                            "dataset": ds.name,
-                            "extractor": ext_name,
-                            "preprocessing": pp_name,
-                            "detector": _det_name(det_spec, det),
-                            "seed": seed,
-                            "n_train": len(Ztr),
-                        }
-                        what = f"{ds.name} · seed {seed} · {ext_name} | {pp_name} | {row['detector']}"
-                        t1 = time.time()
-                        with step(f"fit {what}"):
-                            det.fit(Ztr)
-                        with step(f"score + metrics {what}"):
-                            s = det.score(Zte)
-                            _add_metrics(row, ds.test_labels, s, det.predict(Zte), seed=seed, **opts)
-                        dt = time.time() - t1
-                        row.update(
-                            threshold=float(det.threshold_), threshold_quantile=det.threshold_quantile,
-                            feat_dim=Ztr.shape[1], feat_time_s=round(t_feat, 2), det_time_s=round(dt, 3),
-                        )
+                        row, dt = _detector_run(Xtr_all, Xte, ds.test_labels, ds.name, ext_name, t_feat, det_spec,
+                                                seed, pp, train_subsample, opts)
                         rows.append(row)
                         prog.add("detector", dt)
                         _log_run(logger, prog, row, dt)
@@ -235,6 +222,43 @@ def benchmark(
                 _log_run(logger, prog, row, dt)
     _log_end(logger, prog, rows)
     return rows
+
+
+def _detector_run(Xtr_all, Xte, labels, ds_name: str, ext_name: str, t_feat: float, det_spec, seed: int, pp,
+                  train_subsample, opts) -> Tuple[Dict[str, Any], float]:
+    """One benchmark run of a feature pipeline: training subset for ``seed`` -> preprocessing -> detector
+    -> metrics. Shared by the sequential and the parallel benchmark so both give identical rows."""
+    import copy
+
+    Xtr = Xtr_all[_subsample(len(Xtr_all), train_subsample, seed)]
+    pp_name = "+".join(map(str, pp)) if pp else "-"
+    t1 = time.time()
+    with step(f"preprocessing {pp_name} (seed {seed}, {len(Xtr)} training images)"):
+        prep = build_preprocessing(pp)
+        Ztr = prep.fit_transform(Xtr) if prep is not None else Xtr
+        Zte = prep.transform(Xte) if prep is not None else Xte
+    det = copy.deepcopy(det_spec) if isinstance(det_spec, BaseDetector) else build_detector(det_spec)
+    _seed_detector(det, det_spec, seed)
+    row = {"dataset": ds_name, "extractor": ext_name, "preprocessing": pp_name, "detector": _det_name(det_spec, det),
+           "seed": seed, "n_train": len(Ztr)}
+    what = f"{ds_name} · seed {seed} · {ext_name} | {pp_name} | {row['detector']}"
+    with step(f"fit {what}"):
+        det.fit(Ztr)
+    with step(f"score + metrics {what}"):
+        s = det.score(Zte)
+        _add_metrics(row, labels, s, det.predict(Zte), seed=seed, **opts)
+    dt = time.time() - t1
+    row.update(threshold=float(det.threshold_), threshold_quantile=det.threshold_quantile, feat_dim=Ztr.shape[1],
+               feat_time_s=round(t_feat, 2), det_time_s=round(dt, 3))
+    return row, dt
+
+
+def extractor_label(ext: FeatureExtractor) -> str:
+    """Name of an extractor in result rows, e.g. ``facebook/dinov2-base[mean@[6, 9, 12]]``."""
+    name = getattr(ext, "model_name", type(ext).__name__)
+    if getattr(ext, "pooling", None) not in (None, "auto"):
+        name += f"[{ext.pooling}" + (f"@{ext.layer}" if getattr(ext, "layer", None) is not None else "") + "]"
+    return name
 
 
 def _hub_name(spec) -> Optional[str]:

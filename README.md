@@ -273,6 +273,42 @@ From Python, messages go to the standard `logging` module under the `imgad` logg
 `benchmark(..., verbose=True)` prints them when logging is not configured, and
 `imgad.progress.setup_logging(logging.DEBUG, log_file="run.log")` selects the level and adds a file.
 
+### Parallel benchmarks (multiple models on the GPU)
+
+By default the benchmark runs sequentially. With `-j/--jobs` and/or `--devices` it runs in parallel:
+
+```bash
+imgad devices --config configs/mvtec_benchmark.yaml   # GPUs, free memory, memory estimate per model
+imgad benchmark --config configs/mvtec_benchmark.yaml -j 8 --devices auto
+```
+
+- **Accelerator jobs.** Each feature extractor is loaded once in a worker process on a GPU and
+  extracts the features of every dataset; each Anomalib run (model × dataset × seed) is also a job.
+  Several jobs share a GPU when they fit in its memory.
+- **Availability checks.** GPUs and their free memory are read with `nvidia-smi` (or NVML), without
+  creating CUDA contexts in the main process. A job starts only when its estimated memory fits both in
+  the budget (free memory at start × 0.9, minus what running jobs reserved) and in the memory that is
+  free right now (other processes may be using the GPU). The first estimate comes from the checkpoint
+  size on the Hub (or `--gpu-mem-gb`, default 4 GiB); after a model has run, its measured peak is used.
+  A job that still runs out of memory is retried alone on an idle device.
+- **Pipelining.** As soon as the features of an extractor are ready, its detector runs (dataset × seed ×
+  preprocessing × detector) start on a pool of `-j` CPU processes while the GPU moves on.
+- **Same results.** Rows are identical to the sequential run (only the timing columns differ) and come
+  out in the same order.
+
+| Option | YAML (`parallel:`) | Meaning |
+|---|---|---|
+| `-j N`, `--jobs N` | `jobs` | CPU worker processes for detector runs (`-1` = all cores) |
+| `--devices auto` | `devices` | `auto` (all GPUs, else CPU), `cpu`, `cuda:0,cuda:1`… |
+| `--gpu-jobs auto` | `gpu_jobs` | maximum concurrent jobs per GPU (`auto`: as many as fit, up to 4) |
+| `--gpu-mem-gb 4` | `gpu_mem_gb` | memory assumed for jobs of unknown size |
+
+From Python: `benchmark(..., n_jobs=8, devices="auto")`. On a laptop GPU (8 GB) with three ViT
+extractors (DINOv3-B, DINOv2-S, DINOv2-B), five detectors, PatchCore and three seeds on two datasets,
+the parallel run took 32 s instead of 59 s; the gain grows with larger datasets and more GPUs.
+Parallel workers are started with `spawn`, so scripts that call `benchmark(..., n_jobs>1)` must use an
+`if __name__ == "__main__":` guard.
+
 ## Benchmark reports
 
 `imgad benchmark --report DIR` writes a markdown report with figures:
@@ -378,6 +414,8 @@ imgad calibrate --model bottle.joblib --normal val/good --anomalous val/defects 
 imgad info --model bottle_cal.joblib         # configuration, threshold and metadata
 
 imgad benchmark --config configs/mvtec_benchmark.yaml --out results.csv --report report/ --log-file run.log
+imgad benchmark --config configs/mvtec_benchmark.yaml -j 8 --devices auto   # parallel, several models per GPU
+imgad devices                                # GPUs, free memory and parallel plan
 
 # gated Hugging Face models (see "Gated and private models")
 imgad hf-login
@@ -416,7 +454,8 @@ src/imgad/
   detectors/     base.py (interface, registry, calibration) · classical.py
   anomalib_backend.py (AnomalibPipeline) · maps.py (masks, heatmaps)
   preprocessing.py · pipeline.py · inference.py · data.py · evaluation.py · stats.py · report.py
-  progress.py (logging, ETA) · hub.py (gated models, tokens) · cli.py
+  progress.py (logging, ETA) · hub.py (gated models, tokens)
+  parallel.py · devices.py (parallel benchmarks, GPU memory checks) · cli.py
 configs/         example benchmark YAML files
 examples/        quickstart.py · inference.py · compare_models.py · extending.py · anomalib_models.py
 benchmarks/      example benchmark results

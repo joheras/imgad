@@ -43,7 +43,7 @@ from .evaluation import evaluate_maps, evaluate_scores, benchmark
 from . import data, hub, stats
 from .hub import GatedModelError
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "FeatureExtractor",
