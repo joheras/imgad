@@ -20,7 +20,10 @@ def test_cards_are_consistent():
         assert c.general or set(c.modalities) <= set(zoo.MODALITIES)
         assert c.spec["type"] in ("hf", "open_clip", "timm")
         ext = build_extractor(f"zoo:{c.name}", device="cpu")          # lazy: weights are not loaded
-        assert ext.model_name.endswith(c.hub_id.split("/")[-1]) or c.hub_id.lower() in ext.model_name.lower()
+        if "checkpoint" in c.spec:                                     # raw checkpoint into a timm architecture
+            assert ext.checkpoint == c.spec["checkpoint"] and ext.data_config == c.spec.get("data_config", {})
+        else:
+            assert ext.model_name.endswith(c.hub_id.split("/")[-1]) or c.hub_id.lower() in ext.model_name.lower()
         assert _hub_name(f"zoo:{c.name}") == c.hub_id
 
 
@@ -36,6 +39,20 @@ def test_recommend_order_and_filters():
     assert {c.name for c in zoo.recommend()} == {c.name for c in zoo.list_cards()}
     with pytest.raises(ValueError, match="Unknown modality"):
         zoo.recommend("teeth")
+
+
+def test_ophthalmology_recommendations():
+    fundus = [c.name for c in zoo.recommend("fundus", include_general=False)]
+    assert fundus[0] == "retfound-cfp" and {"visionfm-fundus", "retizero", "flair", "retfound-green"} <= set(fundus)
+    assert fundus.index("urfound") < fundus.index("medsiglip") < fundus.index("biomedclip")   # fewer modalities first
+    oct_ = [c.name for c in zoo.recommend("oct", include_general=False)]
+    assert oct_[:3] == ["retfound-oct", "visionfm-oct", "retfound-oct-mirror"] and "retfound-cfp" not in oct_
+    assert [c.name for c in zoo.recommend("cfp", include_general=False, commercial=True)][:2] == ["flair", "urfound"]
+    retizero = zoo.get("retizero")
+    assert not retizero.commercial_ok and retizero.spec["checkpoint"].startswith("gdrive:")
+    assert _hub_name("zoo:retfound-cfp") == "YukunZhou/RETFound_mae_natureCFP"                # gated: access checked
+    assert _hub_name({"type": "timm", "model_name": "vit_base_patch16_224",
+                      "checkpoint": "hf-hub:yyyyk/UrFound/urfound_mm.pth"}) == "hf-hub:yyyyk/UrFound"
 
 
 def test_benchmark_yaml_and_cli(capsys):

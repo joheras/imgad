@@ -23,17 +23,20 @@ MODALITIES: Dict[str, str] = {
     "mri": "Magnetic resonance (2-D slices)",
     "histopathology": "H&E (and IHC) histology tiles",
     "dermatology": "Dermoscopic and clinical skin images",
-    "ophthalmology": "Retinal fundus photographs",
-    "oct": "Optical coherence tomography",
+    "ophthalmology": "Retinal colour fundus photographs (CFP)",
+    "oct": "Retinal optical coherence tomography (B-scans)",
 }
 ALIASES = {
     "xray": "chest-xray", "x-ray": "chest-xray", "cxr": "chest-xray", "radiography": "chest-xray",
     "chest": "chest-xray", "pathology": "histopathology", "histology": "histopathology", "wsi": "histopathology",
     "h&e": "histopathology", "he": "histopathology", "skin": "dermatology", "derm": "dermatology",
     "dermoscopy": "dermatology", "fundus": "ophthalmology", "retina": "ophthalmology", "retinal": "ophthalmology",
-    "eye": "ophthalmology", "brain-mri": "mri", "mr": "mri", "tomography": "ct",
+    "eye": "ophthalmology", "cfp": "ophthalmology", "ophthalmic": "ophthalmology",
+    "retinal-oct": "oct", "b-scan": "oct", "brain-mri": "mri", "mr": "mri", "tomography": "ct",
 }
 NON_COMMERCIAL = ("cc-by-nc", "non-commercial", "research only", "research use")
+# preprocessing of checkpoints trained with ImageNet constants and a 224/256 centre crop (MAE fine-tuning recipe)
+_IMAGENET = {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "crop_pct": 0.875, "interpolation": "bicubic"}
 
 
 @dataclass(frozen=True)
@@ -67,11 +70,24 @@ def _hf(model_name: str, **kw) -> Dict[str, Any]:
     return {"type": "hf", "model_name": model_name, **kw}
 
 
-def _timm(model_name: str, pooling: str = "auto", **timm_kwargs) -> Dict[str, Any]:
-    spec = {"type": "timm", "model_name": model_name, "pooling": pooling}
+def _timm(model_name: str, pooling: str = "auto", checkpoint: Optional[str] = None,
+          checkpoint_key: Optional[str] = None, checkpoint_prefix: Optional[str] = None,
+          data_config: Optional[Dict[str, Any]] = None, **timm_kwargs) -> Dict[str, Any]:
+    spec: Dict[str, Any] = {"type": "timm", "model_name": model_name, "pooling": pooling}
     if timm_kwargs:
         spec["timm_kwargs"] = timm_kwargs
+    for k, v in (("checkpoint", checkpoint), ("checkpoint_key", checkpoint_key),
+                 ("checkpoint_prefix", checkpoint_prefix), ("data_config", data_config)):
+        if v is not None:
+            spec[k] = v
     return spec
+
+
+def _retfound(repo: str, arch: str = "vit_large_patch16_224", key: str = "model", **kw) -> Dict[str, Any]:
+    """Official RETFound weights: a raw .pth named like the repo, loaded into a timm ViT."""
+    name = repo.split("/")[1]
+    return _timm(arch, pooling="mean", checkpoint=f"hf-hub:{repo}/{name}.pth", checkpoint_key=key,
+                 data_config=_IMAGENET, **kw)
 
 
 CARDS: List[ModelCard] = [
@@ -144,6 +160,104 @@ CARDS: List[ModelCard] = [
         notes="DINOv2 ViT-L/16 on ~456M tiles from 60k H&E slides (TCGA, CPTAC, GTEx…). Public, no request needed.",
         reference="owkin/phikon-v2 model card",
     ),
+    # ---------------------------------------------------------------- ophthalmology (fundus and OCT)
+    ModelCard(
+        "retfound-cfp", _retfound("YukunZhou/RETFound_mae_natureCFP"), ("ophthalmology",),
+        "YukunZhou/RETFound_mae_natureCFP", "gated", "CC-BY-NC-4.0", "non-commercial research", 1024,
+        notes="RETFound (MAE ViT-L/16), colour-fundus weights of the Nature paper. Embedding = mean patch token "
+              "after the encoder norm; ImageNet normalisation, 224 px.",
+        reference="Zhou et al., Nature 2023",
+    ),
+    ModelCard(
+        "retfound-oct", _retfound("YukunZhou/RETFound_mae_natureOCT"), ("oct",),
+        "YukunZhou/RETFound_mae_natureOCT", "gated", "CC-BY-NC-4.0", "non-commercial research", 1024,
+        notes="RETFound (MAE ViT-L/16), OCT weights of the Nature paper (B-scans).",
+        reference="Zhou et al., Nature 2023",
+    ),
+    ModelCard(
+        "retfound-dinov2", _retfound("YukunZhou/RETFound_dinov2_meh", arch="vit_large_patch14_dinov2",
+                                     key="teacher", img_size=224),
+        ("ophthalmology",), "YukunZhou/RETFound_dinov2_meh", "gated", "CC-BY-NC-4.0", "non-commercial research", 1024,
+        notes="RETFound retrained with DINOv2 (ViT-L/14, teacher weights) on part of the MEH AlzEye fundus cohort.",
+        reference="Zhou et al., Nature Communications 2026 (pre-training data effects in retinal foundation models)",
+    ),
+    ModelCard(
+        "retfound-green",
+        _timm("vit_small_patch14_reg4_dinov2", pooling="mean", img_size=392,
+              checkpoint="https://github.com/justinengelmann/RETFound_Green/releases/download/v0.1/retfoundgreen_statedict.pth",
+              data_config={"mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5], "input_size": [3, 392, 392], "crop_pct": 1.0}),
+        ("ophthalmology",), "github.com/justinengelmann/RETFound_Green", "public",
+        "custom non-commercial licence", "non-commercial research; no industry-involved projects", 384,
+        notes="ViT-S/14 with 4 registers trained with token reconstruction on 75k public fundus images; 392 px, "
+              "mean of patch tokens as in its README. Small (87 MB) and fast. Weights from the GitHub release.",
+        reference="Engelmann & Bernabeu, arXiv 2405.00117",
+    ),
+    ModelCard(
+        "flair",
+        _timm("resnet50", checkpoint="hf-hub:jusiro2/FLAIR/model.safetensors", checkpoint_prefix="vision_model.model.",
+              data_config={"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0], "input_size": [3, 512, 512], "crop_pct": 1.0}),
+        ("ophthalmology",), "jusiro2/FLAIR", "public", "Apache-2.0", "research", 2048,
+        notes="Vision tower (ResNet-50) of the FLAIR vision–language model, trained with expert text descriptions "
+              "on 38 public fundus datasets (288k images). Inputs in [0, 1] at 512 px; average-pooled features "
+              "before the text projection.",
+        reference="Silva-Rodríguez et al., Medical Image Analysis 2025",
+    ),
+    ModelCard(
+        "urfound",
+        _timm("vit_base_patch16_224", pooling="mean", checkpoint="hf-hub:yyyyk/UrFound/urfound_mm.pth",
+              checkpoint_key="model", data_config=_IMAGENET),
+        ("ophthalmology", "oct"), "yyyyk/UrFound", "public", "MIT", "research", 768,
+        notes="One ViT-B/16 encoder for both fundus and OCT, trained with knowledge-guided masked modelling on "
+              "~180k retinal images.",
+        reference="Yu et al., MICCAI 2024",
+    ),
+    ModelCard(
+        "retizero",
+        _timm("vit_large_patch16_224", pooling="cls", checkpoint="gdrive:14bMmnefO73_NL1Xc4x0A5qFNbuI7GqKM/retizero.pth",
+              checkpoint_prefix="vision_model.model.lora_vit.", data_config={**_IMAGENET, "crop_pct": 1.0}),
+        ("ophthalmology",), "github.com/LooKing9218/RetiZero", "public", "no license file in the repository",
+        "research only (no license stated; ask the authors before other uses)", 1024,
+        notes="Vision–language model (RETFound ViT-L/16 image encoder with LoRA, merged at load time) trained on "
+              "341,896 fundus images with text covering 400+ fundus diseases. Class token, 224 px. Weights "
+              "(1.6 GB) from Google Drive.",
+        reference="Wang et al., Nature Communications 2025",
+    ),
+    ModelCard(
+        "visionfm-fundus",
+        _timm("vit_base_patch16_224", pooling="cls", checkpoint="gdrive:13uWm0a02dCWyARUcrCdHZIcEgRfBmVA4/visionfm_fundus.pth",
+              checkpoint_key="teacher", checkpoint_prefix="backbone.",
+              data_config={"mean": [0.4237, 0.2609, 0.1284], "std": [0.2948, 0.2017, 0.1367], "crop_pct": 1.0}),
+        ("ophthalmology",), "github.com/ABILab-CUHK/VisionFM", "public", "CC-BY-NC-4.0",
+        "research and education only; no commercial use", 768,
+        notes="VisionFM fundus encoder: iBOT ViT-B/16 (teacher weights), class token, with VisionFM's own fundus "
+              "normalisation. Weights (1.5 GB) from Google Drive.",
+        reference="Qiu et al., NEJM AI 2024",
+    ),
+    ModelCard(
+        "visionfm-oct",
+        _timm("vit_base_patch16_224", pooling="cls", checkpoint="gdrive:1o6E-ine2QLx2pxap-c77u-SU0FjxwypA/visionfm_oct.pth",
+              checkpoint_key="teacher", checkpoint_prefix="backbone.",
+              data_config={"mean": [0.2109, 0.2109, 0.2109], "std": [0.1760, 0.1760, 0.1760], "crop_pct": 1.0}),
+        ("oct",), "github.com/ABILab-CUHK/VisionFM", "public", "CC-BY-NC-4.0",
+        "research and education only; no commercial use", 768,
+        notes="VisionFM OCT encoder (iBOT ViT-B/16, teacher weights) with VisionFM's OCT normalisation. VisionFM "
+              "also releases FFA, slit-lamp, external-eye, ultrasound, UBM and MRI encoders (same recipe).",
+        reference="Qiu et al., NEJM AI 2024",
+    ),
+    ModelCard(
+        "retfound-cfp-mirror", _timm("hf-hub:bitfount/RETFound_MAE", pooling="mean", data_config=_IMAGENET),
+        ("ophthalmology",), "bitfount/RETFound_MAE", "public", "CC-BY-NC-4.0", "non-commercial research", 1024,
+        notes="Unofficial public copy of RETFound CFP weights in timm format (bitfount). Not verified against the "
+              "official gated weights; prefer zoo:retfound-cfp when you have access.",
+        reference="Zhou et al., Nature 2023",
+    ),
+    ModelCard(
+        "retfound-oct-mirror", _timm("hf-hub:bitfount/RETFound_MAE_OCT", pooling="mean", data_config=_IMAGENET),
+        ("oct",), "bitfount/RETFound_MAE_OCT", "public", "CC-BY-NC-4.0", "non-commercial research", 1024,
+        notes="Unofficial public copy of RETFound OCT weights in timm format (bitfount); not verified against "
+              "the official weights.",
+        reference="Zhou et al., Nature 2023",
+    ),
     # ---------------------------------------------------------------- general baselines
     ModelCard(
         "dinov2-base", _hf("facebook/dinov2-base"), ("*",), "facebook/dinov2-base", "public", "Apache-2.0",
@@ -192,7 +306,7 @@ def recommend(
     commercial: bool = False,
 ) -> List[ModelCard]:
     """Models to benchmark for a modality, most specific first: domain models trained on that modality
-    (single-modality models before multi-modality ones), then general-purpose baselines.
+    (those covering fewer modalities first), then general-purpose baselines.
 
     ``public_only`` drops gated models; ``commercial`` drops models whose license or terms are
     non-commercial / research-only. Without a modality, every card is returned (filters still apply).
@@ -207,9 +321,9 @@ def recommend(
             continue
         if c.general:
             if include_general:
-                picked.append((2, i, c))
+                picked.append((len(MODALITIES) + 1, i, c))
         elif m is None or m in c.modalities:
-            picked.append((0 if len(c.modalities) == 1 else 1, i, c))
+            picked.append((len(c.modalities), i, c))
     return [c for _, _, c in sorted(picked, key=lambda t: (t[0], t[1]))]
 
 

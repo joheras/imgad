@@ -37,8 +37,8 @@ images ──► FeatureExtractor ──► preprocessing ──► classical de
 -   :material-hospital-box-outline: **Medical imaging**
 
     Reads 16-bit images, DICOM and NIfTI, with configurable intensity windows. Pages on medical
-    foundation models, medical benchmarks and clinical evaluation practice.
-    [Medical imaging](medical.md)
+    foundation models, medical benchmarks and clinical evaluation practice, with a dedicated guide to
+    fundus and OCT. [Medical imaging](medical.md) · [Ophthalmology](ophthalmology.md)
 
 </div>
 

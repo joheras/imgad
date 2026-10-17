@@ -26,6 +26,10 @@ Generated from the docstrings.
 
 ::: imgad.features.timm_models.TimmFeatureExtractor
 
+::: imgad.features.timm_models.load_checkpoint
+
+::: imgad.features.timm_models.checkpoint_file
+
 ::: imgad.features.base.build_extractor
 
 ## Medical model zoo

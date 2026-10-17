@@ -49,7 +49,9 @@ nav:
       - Benchmark reports: guide/reports.md
       - Gated Hugging Face models: guide/gated-models.md
       - Command line: guide/cli.md
-  - Medical imaging: medical.md
+  - Medical imaging:
+      - Overview: medical.md
+      - Ophthalmology: ophthalmology.md
   - API reference: api.md
   - About: about.md
 

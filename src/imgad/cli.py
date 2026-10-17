@@ -334,19 +334,22 @@ def cmd_models(args):
     print(title + " (most specific first; benchmark them on your data):\n")
     access = {}
     if args.check:
-        from imgad.hub import check_access
+        from imgad.hub import check_access, is_hub_model
 
         token = _token(args)
-        access = {c.name: check_access(c.hub_id, token) for c in cards}
+        access = {c.name: check_access(c.hub_id, token) for c in cards if is_hub_model(c.hub_id)}
+    wn = max([len(c.name) for c in cards] + [15])
+    wl = min(max([len(c.license) for c in cards] + [10]), 38)
     for c in cards:
         kind = "general baseline" if c.general else ", ".join(c.modalities)
-        line = f"  zoo:{c.name:<15} {c.access:<7} {c.license:<38} {kind}"
+        lic = c.license if len(c.license) <= wl else c.license[: wl - 1] + "…"
+        line = f"  zoo:{c.name:<{wn}} {c.access:<7} {lic:<{wl}} {kind}"
         if c.name in access:
             st = access[c.name]
             line += f"   [your access: {'ok' if st.ok else 'NO'} - {st.state}]"
         print(line)
         if args.verbose:
-            print(f"      hub: {c.hub_id} · dim: {c.dim or '?'} · use: {c.use}")
+            print(f"      source: {c.hub_id} · dim: {c.dim or '?'} · use: {c.use}")
             if c.notes:
                 print(f"      {c.notes}")
     print("\nUse them as extractors: build_extractor('zoo:<name>') or `- zoo:<name>` in a benchmark YAML "
