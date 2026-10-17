@@ -28,7 +28,7 @@ from PIL import Image
 
 from .data import IMG_EXTENSIONS, list_images
 from .pipeline import load_pipeline
-from .utils import ImageLike, batched
+from .utils import ImageLike, batched, is_single_array
 
 
 @dataclass
@@ -163,14 +163,20 @@ class AnomalyPredictor:
         for i, r in enumerate(results):
             if r.anomaly_map is None:
                 continue
-            src = Path(r.source)
+            from .imageio import split_ref
+
+            path, axis, index = split_ref(r.source)
+            src = Path(path)
             # parent folder in the name: MVTec-like layouts reuse file names (test/<type>/000.png)
             stem = f"{src.parent.name}_{src.stem}" if src.is_file() else f"image_{i}"
+            if axis is not None and src.is_file():
+                stem = f"{src.parent.name}_{src.name.split('.')[0]}_{axis}{index}"
             if stem in used:
                 stem = f"{stem}_{i}"
             used.add(stem)
             if src.is_file():
-                heat = overlay(r.source, r.anomaly_map, low, thr, alpha)
+                heat = overlay(r.source, r.anomaly_map, low, thr, alpha, getattr(self.pipeline, "intensity", None)
+                               or getattr(getattr(self.pipeline, "extractor", None), "intensity", None))
             else:
                 heat = Image.fromarray(colorize(r.anomaly_map, low, thr))
             r.heatmap = str(out_dir / f"{stem}_heatmap.png")
@@ -181,25 +187,28 @@ class AnomalyPredictor:
 
     @staticmethod
     def _expand(images, recursive: bool):
-        if isinstance(images, (str, os.PathLike, Image.Image)) or (
-            isinstance(images, np.ndarray) and images.ndim in (2, 3) and images.dtype == np.uint8
-        ):
+        if isinstance(images, (str, os.PathLike, Image.Image)) or is_single_array(images):
             images = [images]
         items, names = [], []
         for i, img in enumerate(images):
             if isinstance(img, (str, os.PathLike)):
-                p = Path(img)
-                if p.is_dir():
+                from .imageio import exists, is_nifti, split_ref
+
+                path, axis, _ = split_ref(img)
+                p = Path(path)
+                if axis is None and p.is_dir():
                     found = list_images(p, recursive=recursive)
                     items += found
                     names += found
                     continue
-                if not p.exists():
+                if not exists(img):
                     raise FileNotFoundError(p)
-                if p.suffix.lower() not in IMG_EXTENSIONS:
+                if axis is None and is_nifti(path):
+                    raise ValueError(f"{p} is a volume: use imgad.data.volume_slices() to get its slices")
+                if axis is None and p.suffix.lower() not in IMG_EXTENSIONS:
                     raise ValueError(f"Not an image file: {p}")
-                items.append(str(p))
-                names.append(str(p))
+                items.append(str(img))
+                names.append(str(img))
             else:
                 items.append(img)
                 names.append(getattr(img, "filename", None) or f"<image {i}>")

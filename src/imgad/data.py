@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
-IMG_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
+IMG_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".dcm", ".dicom")
 PathLike = Union[str, Path]
 
 
@@ -96,6 +96,52 @@ def _find_mask(folder: Path, image: str) -> Optional[str]:
         if (folder / name).exists():
             return str(folder / name)
     return None
+
+
+def volume_slices(
+    volumes: Union[PathLike, Sequence[PathLike]],
+    axis: str = "z",
+    step: int = 1,
+    middle_only: bool = False,
+    skip_empty: bool = True,
+) -> List[str]:
+    """Slice references (``"vol.nii.gz::z=42"``) for NIfTI volumes or multi-frame DICOM files; every imgad
+    function accepts them as image paths. ``volumes``: files and/or folders (searched recursively).
+
+    ``axis`` x / y / z (NIfTI, RAS orientation; ignored for DICOM, which uses its frames), ``step`` keeps
+    every n-th slice, ``middle_only`` one slice per volume, ``skip_empty`` drops constant slices (e.g. the
+    background around a skull-stripped brain).
+
+    Scores are per slice: aggregate them per volume (e.g. the maximum) for a volume-level decision.
+    """
+    from .imageio import _nifti_slice, dicom_frames, is_dicom, is_nifti, nifti_shape
+
+    if isinstance(volumes, (str, Path)):
+        volumes = [volumes]
+    files: List[str] = []
+    for v in volumes:
+        v = Path(v)
+        if v.is_dir():
+            files += sorted(str(p) for p in v.rglob("*") if p.is_file() and (is_nifti(str(p)) or is_dicom(str(p))))
+        else:
+            files.append(str(v))
+    refs = []
+    for f in files:
+        if is_nifti(f):
+            n, key = nifti_shape(f)["xyz".index(axis)], axis
+        elif is_dicom(f):
+            n, key = dicom_frames(f), "frame"
+        else:
+            raise ValueError(f"Not a volume (NIfTI or DICOM): {f}")
+        idx = [n // 2] if middle_only else list(range(0, n, step))
+        for i in idx:
+            ref = f"{f}::{key}={i}"
+            if skip_empty and key != "frame" and not middle_only:
+                arr = _nifti_slice(f, axis, i)  # cheap: the volume is cached
+                if float(arr.max()) == float(arr.min()):
+                    continue
+            refs.append(ref)
+    return refs
 
 
 def mvtec_categories(root: PathLike) -> List[str]:

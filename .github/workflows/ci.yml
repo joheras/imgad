@@ -39,14 +39,14 @@ jobs:
       - name: Install imgad
         run: |
           extras="dev"
-          if [ "${{ matrix.anomalib }}" = "true" ]; then extras="dev,anomalib"; fi
+          if [ "${{ matrix.anomalib }}" = "true" ]; then extras="dev,anomalib,medical"; fi
           pip install -e ".[${extras}]"
 
       - name: Show versions
         run: python -c "import torch, transformers, sklearn; print(torch.__version__, transformers.__version__, sklearn.__version__)"
 
       # Tests run offline: a tiny CLIP is generated locally and anomalib models use untrained backbones.
-      # Without anomalib, tests/test_anomalib.py is skipped.
+      # Without anomalib (py3.10 job), tests/test_anomalib.py and the DICOM/NIfTI tests are skipped.
       - name: Run tests
         env:
           HF_HUB_OFFLINE: "1"

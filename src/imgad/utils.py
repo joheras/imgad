@@ -12,19 +12,13 @@ from PIL import Image
 ImageLike = Union[str, os.PathLike, Image.Image, np.ndarray]
 
 
-def load_image(img: ImageLike) -> Image.Image:
-    """Return an RGB PIL image from a path, PIL image or HxW(xC) numpy array."""
-    if isinstance(img, Image.Image):
-        return img.convert("RGB")
-    if isinstance(img, (str, os.PathLike)):
-        with Image.open(img) as im:
-            return im.convert("RGB")
-    if isinstance(img, np.ndarray):
-        arr = img
-        if arr.dtype != np.uint8:
-            arr = np.clip(arr * (255.0 if arr.max() <= 1.0 else 1.0), 0, 255).astype(np.uint8)
-        return Image.fromarray(arr).convert("RGB")
-    raise TypeError(f"Unsupported image type: {type(img)!r}")
+def load_image(img: ImageLike, intensity=None) -> Image.Image:
+    """Return an RGB 8-bit PIL image from a path (raster, DICOM, NIfTI slice reference), PIL image or
+    HxW(xC) numpy array. Images with more than 8 bits are mapped with the ``intensity`` rule (see
+    :mod:`imgad.imageio`; default ``"auto"``); 8-bit images are returned unchanged."""
+    from .imageio import read_image
+
+    return read_image(img, intensity)
 
 
 def batched(items: Sequence, batch_size: int) -> Iterator[Sequence]:
@@ -47,13 +41,18 @@ def resolve_device(device: str | None = None) -> str:
     return "cpu"
 
 
+def is_single_array(x) -> bool:
+    """One image given as an array: HxW, or HxWxC with 1, 3 or 4 channels (any dtype, e.g. 16-bit)."""
+    return isinstance(x, np.ndarray) and (x.ndim == 2 or (x.ndim == 3 and x.shape[-1] in (1, 3, 4)))
+
+
 def as_list(images: Union[ImageLike, Iterable[ImageLike]]) -> List[ImageLike]:
-    if isinstance(images, (str, os.PathLike, Image.Image)):
-        return [images]
-    if isinstance(images, np.ndarray) and images.ndim in (2, 3) and images.dtype == np.uint8:
+    if isinstance(images, (str, os.PathLike, Image.Image)) or is_single_array(images):
         return [images]
     return list(images)
 
 
 def is_path(x) -> bool:
-    return isinstance(x, (str, os.PathLike)) and Path(x).exists()
+    from .imageio import exists
+
+    return isinstance(x, (str, os.PathLike)) and exists(x)

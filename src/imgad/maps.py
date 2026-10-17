@@ -52,9 +52,10 @@ def colorize(m: np.ndarray, low: float, threshold: float) -> np.ndarray:
     return (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
 
 
-def overlay(image: ImageLike, m: np.ndarray, low: float, threshold: float, alpha: float = 0.5) -> Image.Image:
+def overlay(image: ImageLike, m: np.ndarray, low: float, threshold: float, alpha: float = 0.5,
+            intensity=None) -> Image.Image:
     """Heatmap of ``m`` blended over ``image`` (map is resized to the image size)."""
-    img = load_image(image)
+    img = load_image(image, intensity)
     m = resize_map(m, (img.height, img.width))
     heat = Image.fromarray(colorize(m, low, threshold))
     return Image.blend(img, heat, alpha)

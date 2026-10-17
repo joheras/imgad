@@ -177,7 +177,7 @@ class AnomalyDetectionPipeline(ThresholdMixin):
 
         joblib.dump(
             {
-                "extractor": {"type": self.extractor.registry_name, **self.extractor.get_config()},
+                "extractor": self.extractor.full_config(),
                 "preprocessing": self.preprocessing,
                 "preprocessing_steps": [s for s in self.preprocessing_steps if isinstance(s, str)],
                 "detector": self.detector,
@@ -226,7 +226,7 @@ class AnomalyDetectionPipeline(ThresholdMixin):
     def info(self) -> Dict[str, Any]:
         """Human-readable summary of a (trained) pipeline."""
         return {
-            "extractor": {"type": self.extractor.registry_name, **self.extractor.get_config()},
+            "extractor": self.extractor.full_config(),
             "preprocessing": self.preprocessing_steps,
             "detector": repr(self.detector),
             "threshold": self.threshold_,

@@ -3,6 +3,7 @@
 [![CI](https://github.com/joheras/imgad/actions/workflows/ci.yml/badge.svg)](https://github.com/joheras/imgad/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/imgad.svg)](https://pypi.org/project/imgad/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/joheras/imgad/blob/main/LICENSE)
+[![Docs](https://img.shields.io/badge/docs-joheras.github.io%2Fimgad-blue.svg)](https://joheras.github.io/imgad/)
 
 A modular framework for image-level anomaly detection in the **one-class** setting (training uses
 normal images only):
@@ -23,6 +24,7 @@ runs, confidence intervals, statistical tests and automatic markdown reports.
 pip install imgad                    # core
 pip install "imgad[anomalib]"        # + Anomalib models (PatchCore, PaDiM, EfficientAD…)
 pip install "imgad[report]"          # + figures in benchmark reports (matplotlib)
+pip install "imgad[medical]"         # + DICOM and NIfTI (pydicom, nibabel)
 pip install "imgad[all]"             # + open_clip, pyod, pandas, anomalib, matplotlib, pytest
 ```
 
@@ -229,6 +231,36 @@ data.one_vs_rest(root, normal_class="cat")       # semantic AD from a classifica
 Each returns an `AnomalyDataset` with `train_paths`, `test_paths`, `test_labels`, `test_types` and, for
 MVTec, `test_masks` (path of the ground-truth mask in `ground_truth/<type>/<name>_mask.png`, or `None`
 for normal images).
+
+## Medical and high-bit-depth images (16-bit, DICOM, NIfTI)
+
+```bash
+pip install "imgad[medical]"     # pydicom + nibabel
+```
+
+Images with more than 8 bits (16-bit PNG/TIFF, DICOM, NIfTI, float arrays) are mapped to the 8 bits the
+models expect with an **intensity rule**; 8-bit images are never changed.
+
+| Rule | Mapping |
+|---|---|
+| `auto` (default) | 8-bit unchanged; DICOM with a window -> that window; otherwise per-image percentiles 0.5–99.5 |
+| `window:lo,hi` | fixed range, the same for every image (e.g. `window:-1000,400` for CT in HU, `window:0,4095` for a 12-bit detector). **Recommended for anomaly detection**: per-image rules hide global intensity anomalies |
+| `percentile:1,99`, `minmax` | per-image percentiles / min–max |
+| `dicom` | the WindowCenter/WindowWidth stored in each DICOM file |
+
+```python
+HFFeatureExtractor("microsoft/rad-dino").set_intensity("window:0,4095")
+build_extractor({"type": "hf", "model_name": "microsoft/rad-dino", "intensity": "dicom"})
+benchmark(..., intensity="window:-1000,400")       # every extractor / Anomalib model without its own rule
+refs = data.volume_slices("scans/", axis="z")       # NIfTI / multi-frame DICOM -> "scan.nii.gz::z=42" refs
+```
+
+CLI: `--intensity` in `fit` and `benchmark` (or `intensity:` in the YAML). DICOM files (`.dcm`) are read with
+their rescale slope/intercept, MONOCHROME1 is inverted, and only pixel data is read: patient metadata is
+never stored or logged. Scores of volume slices are per slice; aggregate them per volume (e.g. the maximum).
+The rule is part of the feature-cache key and of saved pipelines. See the
+[documentation](https://joheras.github.io/imgad/medical/) for medical foundation models, benchmarks and
+evaluation practices.
 
 ## Evaluation and benchmarks
 
@@ -455,7 +487,8 @@ src/imgad/
   anomalib_backend.py (AnomalibPipeline) · maps.py (masks, heatmaps)
   preprocessing.py · pipeline.py · inference.py · data.py · evaluation.py · stats.py · report.py
   progress.py (logging, ETA) · hub.py (gated models, tokens)
-  parallel.py · devices.py (parallel benchmarks, GPU memory checks) · cli.py
+  parallel.py · devices.py (parallel benchmarks, GPU memory checks)
+  imageio.py (16-bit, DICOM, NIfTI, intensity rules) · cli.py
 configs/         example benchmark YAML files
 examples/        quickstart.py · inference.py · compare_models.py · extending.py · anomalib_models.py
 benchmarks/      example benchmark results
