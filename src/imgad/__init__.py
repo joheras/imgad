@@ -25,6 +25,7 @@ from .features import (
     FeatureExtractor,
     HFFeatureExtractor,
     OpenCLIPFeatureExtractor,
+    RetinaCLIPExtractor,
     TimmFeatureExtractor,
     build_extractor,
     register_extractor,
@@ -35,21 +36,23 @@ from .detectors import (
     build_detector,
     register_detector,
     list_detectors,
+    ZeroShotDetector,
 )
 from .preprocessing import build_preprocessing
 from .pipeline import AnomalyDetectionPipeline, load_pipeline
 from .anomalib_backend import AnomalibPipeline, list_anomalib_models
 from .inference import AnomalyPredictor, Prediction
-from .evaluation import evaluate_maps, evaluate_scores, benchmark
-from . import data, hub, stats, zoo
+from .evaluation import evaluate_maps, evaluate_scores, benchmark, successful_rows
+from . import data, hub, prompts, stats, zoo
 from .hub import GatedModelError
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "FeatureExtractor",
     "HFFeatureExtractor",
     "OpenCLIPFeatureExtractor",
+    "RetinaCLIPExtractor",
     "TimmFeatureExtractor",
     "build_extractor",
     "register_extractor",
@@ -58,6 +61,7 @@ __all__ = [
     "build_detector",
     "register_detector",
     "list_detectors",
+    "ZeroShotDetector",
     "build_preprocessing",
     "AnomalyDetectionPipeline",
     "AnomalibPipeline",
@@ -68,6 +72,8 @@ __all__ = [
     "evaluate_scores",
     "evaluate_maps",
     "benchmark",
+    "successful_rows",
+    "prompts",
     "data",
     "hub",
     "zoo",

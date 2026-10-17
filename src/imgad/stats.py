@@ -150,7 +150,8 @@ def summarize_seeds(
 ) -> List[Dict[str, Any]]:
     """Aggregate repeated runs: one row per (dataset, config) with mean, std, number of seeds and a
     t-based ``1 - alpha`` CI of the mean for each metric. Adds a ``dataset="mean"`` row per config
-    with the across-dataset mean of the seed means."""
+    with the across-dataset mean of the seed means. Failed runs (rows with an ``error``) are ignored."""
+    rows = _ok(rows)
     groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
     for r in rows:
         groups[(r["dataset"], _config(r))].append(r)
@@ -220,9 +221,11 @@ def compare_configs(rows: List[Dict[str, Any]], metric: str = "auroc", alpha: fl
     * Nemenyi post-hoc: critical difference (CD) and pairwise p-values,
     * pairwise Wilcoxon signed-rank tests with Holm correction (more powerful with few configs).
 
+    Failed runs (rows with an ``error``) are ignored.
+
     Needs >= 2 datasets; Friedman/Nemenyi need >= 3 configs. Seeds are averaged per dataset first.
     """
-    datasets, configs, M = results_matrix(rows, metric)
+    datasets, configs, M = results_matrix(_ok(rows), metric)
     n, k = M.shape if M.size else (0, 0)
     if n < 2 or k < 2:
         raise ValueError(f"compare_configs needs >= 2 datasets and >= 2 complete configs (got {n} datasets, {k} configs)")
@@ -264,6 +267,7 @@ def compare_configs(rows: List[Dict[str, Any]], metric: str = "auroc", alpha: fl
 def delong_vs_baseline(rows: List[Dict[str, Any]], baseline: str, alpha: float = 0.05) -> List[Dict[str, Any]]:
     """Per (dataset, seed): DeLong test of every config against ``baseline`` (needs rows produced
     with ``keep_scores=True``). p-values are Holm-adjusted within each dataset and seed."""
+    rows = _ok(rows)
     by_key: Dict[Tuple[str, Any], Dict[str, Dict[str, Any]]] = defaultdict(dict)
     for r in rows:
         if "scores" not in r:
@@ -389,3 +393,8 @@ def _num(v: str):
 
 def _config(r: Dict[str, Any]) -> str:
     return r.get("config") or f"{r.get('extractor', '-')} | {r.get('preprocessing', '-')} | {r.get('detector', '-')}"
+
+
+def _ok(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Rows of finished runs (failed runs have an ``error`` and no metrics)."""
+    return [r for r in rows if not r.get("error")]

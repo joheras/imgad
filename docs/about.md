@@ -19,6 +19,7 @@ This work is partially supported by Agencia de Desarrollo Económico de La Rioja
 | 0.3.0 | Parallel benchmarks with several models per GPU and memory checks |
 | 0.4.0 | 16-bit, DICOM and NIfTI images with intensity rules; medical model zoo (`imgad models`) and timm extractor; documentation website |
 | 0.5.0 | Ophthalmology: RETFound, RETFound-Green, VisionFM, RetiZero, FLAIR and UrFound in the zoo; raw checkpoints (Hub, URL, Google Drive) loaded into timm without executing code; ophthalmology guide |
+| 0.6.0 | Zero- and few-shot detection with text prompts (`zero_shot` detector; FLAIR, RetiZero, BiomedCLIP, MedSigLIP, CLIP/SigLIP); few-shot protocol (`k_shots`); benchmarks continue when a run fails |
 
 The full history is on [GitHub releases](https://github.com/joheras/imgad/releases).
 

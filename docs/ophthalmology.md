@@ -50,7 +50,9 @@ imgad models -m fundus -v           # also: -m oct, --public-only, --commercial,
 | `zoo:retfound-oct-mirror` | OCT | copy of RETFound OCT | public · HF Hub · 1.2 GB | CC-BY-NC-4.0 |
 
 All of them are used like any other extractor, e.g. `build_extractor("zoo:visionfm-fundus")` or
-`- zoo:flair` in a benchmark YAML. On top of these, `zoo:medsiglip` (gated) and `zoo:biomedclip` cover
+`- zoo:flair` in a benchmark YAML. FLAIR and RetiZero also come as vision–language models
+(`zoo:flair-clip`, `zoo:retizero-clip`): they encode text too and can detect anomalies without training
+images (see [Zero- and few-shot detection](guide/zero-shot.md)). On top of these, `zoo:medsiglip` (gated) and `zoo:biomedclip` cover
 ophthalmology among other modalities, and `dinov2-base` / `siglip2-base` are the general baselines.
 
 How they differ:
@@ -114,7 +116,7 @@ What the literature does, and how it maps onto imgad:
 | Reconstruction / generative: train on healthy scans, score the reconstruction error | AnoGAN and f-AnoGAN on OCT ([Schlegl et al., MedIA 2019](https://doi.org/10.1016/j.media.2019.01.010)); disease-marker candidates in OCT ([Seeböck et al., 2018](https://arxiv.org/abs/1810.13404)); [Sparse-GAN](https://arxiv.org/abs/1911.12527) (ISBI 2020); [P-Net](https://arxiv.org/abs/2008.03632) (ECCV 2020), which reconstructs from the vessel / layer structure | Anomalib reconstruction models (e.g. `draem`) through the [Anomalib backend](guide/anomalib.md) |
 | Knowledge distillation: a student mimics a teacher on normal data | OCT volume screening, AUROC 0.94 ([Aresta et al., TVST 2025](https://tvst.arvojournals.org/article.aspx?articleid=2802739)) | Anomalib `stfpm`, `reverse_distillation`, `efficient_ad` |
 | Feature embedding + memory bank or density | PatchCore ranks second overall in [BenchReAD](https://arxiv.org/abs/2507.10492) and is the most robust to *unseen* anomalies | Foundation-model features + `knn` / `mahalanobis` / `ocsvm` (this page's models), or Anomalib `patchcore` for anomaly maps |
-| Zero/few-shot vision–language | [MVFA](https://openaccess.thecvf.com/content/CVPR2024/html/Huang_Adapting_Visual-Language_Models_for_Generalizable_Anomaly_Detection_in_Medical_Images_CVPR_2024_paper.html) (CVPR 2024) on OCT17 and RESC; FLAIR and RetiZero zero-shot disease recognition | Not yet: the image encoders are available, text prompting is not |
+| Zero/few-shot vision–language | [MVFA](https://openaccess.thecvf.com/content/CVPR2024/html/Huang_Adapting_Visual-Language_Models_for_Generalizable_Anomaly_Detection_in_Medical_Images_CVPR_2024_paper.html) (CVPR 2024) on OCT17 and RESC; FLAIR and RetiZero zero-shot disease recognition | The `zero_shot` detector with FLAIR, RetiZero, BiomedCLIP or MedSigLIP and fundus/OCT prompts ([guide](guide/zero-shot.md)); learned prompts and adapters (MVFA) are not included |
 | Supervised / semi-supervised, with labelled anomalies | DRA and NFM-DRA, the best methods on BenchReAD, but weaker on unseen anomaly types | Out of scope (imgad is one-class) |
 
 Practical consequences:

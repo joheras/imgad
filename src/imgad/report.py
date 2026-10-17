@@ -155,6 +155,8 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[Any]], align: Optional
 
 class _Report:
     def __init__(self, rows, datasets, metric, alpha, out: Path, fig_dir: Path, plt):
+        self.failed = [r for r in rows if r.get("error")]
+        rows = [r for r in rows if not r.get("error")]
         self.raw = rows
         self.datasets = {d.name: d for d in datasets}
         self.metric, self.alpha, self.out, self.fig_dir, self.plt = metric, alpha, out, fig_dir, plt
@@ -169,7 +171,7 @@ class _Report:
             cfg = r.get("config") or f"{r['extractor']} | {r['preprocessing']} | {r['detector']}"
             groups[(r["dataset"], cfg)].append(r)
             self.meta.setdefault(cfg, {"extractor": r.get("extractor", "-"), "preprocessing": r.get("preprocessing", "-"),
-                                       "detector": r.get("detector", "-")})
+                                       "detector": r.get("detector", "-"), "k_shot": r.get("k_shot")})
         self.groups = groups
         self.configs = list(self.meta)
         # complete configs (present on every dataset) ranked by mean metric
@@ -197,10 +199,11 @@ class _Report:
 
     def label(self, cfg: str) -> str:
         m = self.meta[cfg]
+        shot = f", {m['k_shot']}-shot" if m.get("k_shot") is not None else ""
         if m["extractor"] == "anomalib":
-            return f"{m['detector']} (anomalib)"
+            return f"{m['detector']} (anomalib{shot})"
         prep = f" [{m['preprocessing']}]" if len(self.preps) > 1 else ""
-        return f"{short_extractor(m['extractor'])}{prep} + {m['detector']}"
+        return f"{short_extractor(m['extractor'])}{prep} + {m['detector']}" + (f" ({m['k_shot']}-shot)" if shot else "")
 
     def rows_of(self, ds: str, cfg: str) -> List[Dict[str, Any]]:
         return self.groups.get((ds, cfg), [])
@@ -217,7 +220,7 @@ class _Report:
     # ------------------------------------------------------------------ assemble
     def build(self, title, config, command) -> str:
         if not self.raw:
-            return "# Benchmark report\n\nNo results.\n"
+            return "# Benchmark report\n\nNo results.\n" + "\n".join(self.sec_failed())
         logger.info("Report: statistical tests")
         self._stats = self._run_stats()
         body: List[str] = []
@@ -225,8 +228,10 @@ class _Report:
             ("Data analysis", self.sec_data),
             ("Methods", self.sec_methods),
             ("Results", self.sec_results),
+            ("Few-shot learning curves", self.sec_few_shot),
             ("Discussion", self.sec_discussion),
             ("Limitations", self.sec_limitations),
+            ("Failed runs", self.sec_failed),
             ("Reproducibility", lambda: self.sec_repro(config, command)),
             ("Appendix: results per dataset", self.sec_annex),
         ]
@@ -964,6 +969,48 @@ class _Report:
                             "worse (AUPRO weights every region equally)." if gap > 0.05 else
                             "Both metrics agree: segmentation is good for small defects too."))
         return [p + "\n" for p in P]
+
+    def sec_few_shot(self) -> List[str]:
+        """Mean metric against the number of normal training images, per configuration (few-shot protocol)."""
+        shots = sorted({r["k_shot"] for r in self.raw if r.get("k_shot") is not None})
+        if len(shots) < 2:
+            return []
+        curves: Dict[str, Dict[int, List[float]]] = defaultdict(lambda: defaultdict(list))
+        for r in self.raw:
+            if r.get("k_shot") is not None and r.get(self.metric) is not None:
+                m = self.meta[r["config"]]
+                base = (f"{m['detector']} (anomalib)" if m["extractor"] == "anomalib" else
+                        f"{short_extractor(m['extractor'])}" + (f" [{m['preprocessing']}]" if len(self.preps) > 1 else "")
+                        + f" + {m['detector']}")
+                curves[base][r["k_shot"]].append(r[self.metric])
+        L = [f"Each configuration was run with k normal training images per seed (k = {', '.join(map(str, shots))}; "
+             f"k = 0 is zero-shot). Mean {self.mname} over datasets and seeds:", ""]
+        rows = [[md_escape(b)] + [f"{np.mean(c[k]):.3f}" if c.get(k) else "–" for k in shots]
+                for b, c in sorted(curves.items(), key=lambda kv: -np.mean(kv[1][max(kv[1])]))]
+        L += _table(["Configuration"] + [f"k={k}" for k in shots], rows) + [""]
+        if self.plt is not None:
+            fig, ax = self.plt.subplots(figsize=(6.4, 3.8))
+            for b, c in list(curves.items())[:12]:
+                ks = [k for k in shots if c.get(k)]
+                ax.plot([max(k, 0.5) for k in ks], [np.mean(c[k]) for k in ks], marker="o", label=b)
+            ax.set_xscale("log", base=2)
+            ax.set_xticks([max(k, 0.5) for k in shots], [str(k) for k in shots])
+            ax.set_xlabel("normal training images (k)")
+            ax.set_ylabel(self.mname)
+            ax.legend(fontsize=7, loc="lower right")
+            L.append(self.save(fig, "few_shot", f"{self.mname} against the number of normal training images"))
+        return L
+
+    def sec_failed(self) -> List[str]:
+        if not self.failed:
+            return []
+        L = [f"{len(self.failed)} run(s) failed and are excluded from every table and test above:", ""]
+        rows = [[md_escape(r.get("dataset", "-")), md_escape(r.get("config", "-")), r.get("stage", "-"),
+                 md_escape(str(r.get("error", ""))[:200])] for r in self.failed[:50]]
+        L += _table(["Dataset", "Configuration", "Stage", "Error"], rows)
+        if len(self.failed) > 50:
+            L += ["", f"… and {len(self.failed) - 50} more (see results.csv)."]
+        return L
 
     def sec_limitations(self) -> List[str]:
         L = []

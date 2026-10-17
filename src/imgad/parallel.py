@@ -30,6 +30,7 @@ import os
 import time
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -96,9 +97,12 @@ class _cuda_peak:
 
 
 def _extract_job(ext_cls, ext_cfg: Dict[str, Any], device: str, datasets, cache_dir, token=None,
-                 intensity: str = "auto") -> Dict[str, Any]:
-    """Load the extractor on ``device`` and extract train/test features for every dataset. ``token`` (gated
-    Hub models) travels only through the process pipe; it is never part of the stored config."""
+                 intensity: str = "auto", detectors=()) -> Dict[str, Any]:
+    """Load the extractor on ``device`` and extract train/test features for every dataset (and the prompt
+    embeddings of the zero-shot ``detectors``). ``token`` (gated Hub models) travels only through the process
+    pipe; it is never part of the stored config."""
+    from .evaluation import text_bank
+
     t0 = time.time()
     cfg = dict(ext_cfg)
     params = inspect.signature(ext_cls.__init__).parameters
@@ -113,6 +117,7 @@ def _extract_job(ext_cls, ext_cfg: Dict[str, Any], device: str, datasets, cache_
             if hasattr(ext, "_load"):
                 ext._load()
             t_load = time.time() - t0
+            text = text_bank(ext, detectors)
             feats = {}
             for ds in datasets:
                 t1 = time.time()
@@ -124,16 +129,18 @@ def _extract_job(ext_cls, ext_cfg: Dict[str, Any], device: str, datasets, cache_
         if _is_oom(e):
             return {"oom": True, "error": f"{type(e).__name__}: {e}"}
         raise
-    return {"features": feats, "peak_bytes": peak.peak, "load_s": t_load, "seconds": time.time() - t0}
+    return {"features": feats, "text": text, "peak_bytes": peak.peak, "load_s": t_load, "seconds": time.time() - t0}
 
 
-def _detector_job(Xtr_all, Xte, labels, ds_name, ext_name, t_feat, det_spec, seed, pp, train_subsample, opts):
-    from .evaluation import _detector_run
+def _detector_job(Xtr_all, Xte, labels, ds_name, ext_name, t_feat, det_spec, seed, pp, train_subsample, opts,
+                  k_shot=None, text=None, on_error="continue"):
+    from .evaluation import safe_detector_run
 
-    return _detector_run(Xtr_all, Xte, labels, ds_name, ext_name, t_feat, det_spec, seed, pp, train_subsample, opts)
+    return safe_detector_run(Xtr_all, Xte, labels, ds_name, ext_name, t_feat, det_spec, seed, pp, train_subsample,
+                             opts, k_shot, text, on_error)
 
 
-def _anomalib_job(spec, ds, seed: int, train_subsample, opts, device: str) -> Dict[str, Any]:
+def _anomalib_job(spec, ds, seed: int, train_subsample, opts, device: str, k_shot=None) -> Dict[str, Any]:
     from .evaluation import _benchmark_anomalib
 
     spec = {"name": spec} if isinstance(spec, str) else dict(spec)
@@ -141,7 +148,7 @@ def _anomalib_job(spec, ds, seed: int, train_subsample, opts, device: str) -> Di
     t0 = time.time()
     try:
         with _cuda_peak(device) as peak:
-            row = _benchmark_anomalib(spec, ds, False, seed, train_subsample, **opts)
+            row = _benchmark_anomalib(spec, ds, False, seed, train_subsample, k_shot=k_shot, **opts)
     except Exception as e:
         if _is_oom(e):
             return {"oom": True, "error": f"{type(e).__name__}: {e}"}
@@ -161,6 +168,7 @@ class _Job:
     exclusive: bool = False
     device: Optional[str] = None
     started: float = 0.0
+    crashes: int = 0                # times its worker process died (it is retried once, alone)
 
 
 def _cpu_workers(n_jobs: int) -> int:
@@ -171,9 +179,10 @@ def _cpu_workers(n_jobs: int) -> int:
 
 
 def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_models, seeds, train_subsample, opts,
-                 cache_dir, n_jobs, devices, gpu_jobs, gpu_mem_gb, prog, token=None) -> List[Dict[str, Any]]:
+                 cache_dir, n_jobs, devices, gpu_jobs, gpu_mem_gb, prog, token=None, shots=(None,),
+                 on_error: str = "continue") -> List[Dict[str, Any]]:
     from .anomalib_backend import build_anomalib_pipeline  # noqa: F401  (fail early if misconfigured)
-    from .evaluation import _anomalib_name, _log_run, extractor_label
+    from .evaluation import _anomalib_name, _log_run, _on_failure, _skip_reason, extractor_label, failed_row
     from .features import FeatureExtractor, build_extractor
 
     devs = resolve_devices("auto" if devices is None else devices)
@@ -200,14 +209,38 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
     for i_m, spec in enumerate(anomalib_models):
         for i_ds, ds in enumerate(datasets):
             for i_s, seed in enumerate(seeds):
-                name = _anomalib_name(spec)
-                pending.append(_Job(next(ids), "anomalib", ("anomalib", name), f"{name} on {ds.name} (seed {seed})",
-                                    default_est, {"spec": spec, "ds": ds, "seed": seed, "order": (1, i_m, i_ds, i_s)}))
+                for i_k, k in enumerate(shots):
+                    if k == 0:  # zero-shot: Anomalib models need training images
+                        prog.skip("anomalib")
+                        continue
+                    name = _anomalib_name(spec)
+                    shot = f", {k}-shot" if k is not None else ""
+                    pending.append(_Job(next(ids), "anomalib", ("anomalib", name), f"{name} on {ds.name} (seed {seed}{shot})",
+                                        default_est, {"spec": spec, "ds": ds, "seed": seed, "k": k,
+                                                      "order": (1, i_m, i_ds, i_s, i_k)}))
     learned: Dict[Tuple, int] = {}
 
     ctx = mp.get_context("spawn")
-    acc_pool = ProcessPoolExecutor(rm.total_capacity(), mp_context=ctx, initializer=_init_worker, initargs=(acc_threads,))
-    cpu_pool = ProcessPoolExecutor(n_cpu, mp_context=ctx, initializer=_init_worker, initargs=(1,))
+    sizes = {"acc": (rm.total_capacity(), acc_threads), "cpu": (n_cpu, 1)}
+    pools: Dict[str, ProcessPoolExecutor] = {}
+
+    def pool(kind: str, renew: bool = False) -> ProcessPoolExecutor:
+        """The worker pool of ``kind``; a new one if ``renew`` or if a worker process of the old one died
+        (segfault, killed for lack of host memory...), which breaks the whole pool."""
+        old = pools.get(kind)
+        if old is None or renew or getattr(old, "_broken", False):
+            if old is not None:
+                old.shutdown(wait=False, cancel_futures=True)
+            n, threads = sizes[kind]
+            pools[kind] = ProcessPoolExecutor(n, mp_context=ctx, initializer=_init_worker, initargs=(threads,))
+        return pools[kind]
+
+    def submit(kind: str, fn, *args) -> Future:
+        try:
+            return pool(kind).submit(fn, *args)
+        except BrokenProcessPool:
+            return pool(kind, renew=True).submit(fn, *args)
+
     running: Dict[Future, Any] = {}
     rows: List[Tuple[Tuple, Dict[str, Any]]] = []
 
@@ -224,11 +257,11 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
                 pending.remove(job)
                 job.device, job.started = dev, time.time()
                 if job.kind == "extract":
-                    fut = acc_pool.submit(_extract_job, job.payload["cls"], job.payload["cfg"], dev, datasets, cache_dir,
-                                          token, job.payload["intensity"])
+                    fut = submit("acc", _extract_job, job.payload["cls"], job.payload["cfg"], dev, datasets, cache_dir,
+                                 token, job.payload["intensity"], detectors)
                 else:
                     p = job.payload
-                    fut = acc_pool.submit(_anomalib_job, p["spec"], p["ds"], p["seed"], train_subsample, opts, dev)
+                    fut = submit("acc", _anomalib_job, p["spec"], p["ds"], p["seed"], train_subsample, opts, dev, p["k"])
                 running[fut] = job
                 mem = ""
                 if dev.startswith("cuda"):
@@ -242,18 +275,42 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
                 started = True
                 break
 
-    def submit_detectors(job: _Job, feats: Dict[str, Any]) -> int:
+    def submit_detectors(job: _Job, feats: Dict[str, Any], text) -> int:
         n = 0
         for i_ds, ds in enumerate(datasets):
             Xtr, Xte, t_feat = feats[ds.name]
             for i_s, seed in enumerate(seeds):
-                for i_pp, pp in enumerate(preprocessings):
-                    for i_det, det_spec in enumerate(detectors):
-                        fut = cpu_pool.submit(_detector_job, Xtr, Xte, ds.test_labels, ds.name, job.payload["name"],
-                                              t_feat, det_spec, seed, pp, train_subsample, opts)
-                        running[fut] = ("detector", (0, job.payload["i_ext"], i_ds, i_s, i_pp, i_det))
-                        n += 1
+                for i_k, k in enumerate(shots):
+                    for i_pp, pp in enumerate(preprocessings):
+                        for i_det, det_spec in enumerate(detectors):
+                            if _skip_reason(det_spec, pp, k, text):
+                                prog.skip("detector")
+                                continue
+                            args = (Xtr, Xte, ds.test_labels, ds.name, job.payload["name"], t_feat, det_spec, seed, pp,
+                                    train_subsample, opts, k, text, on_error)
+                            fut = submit("cpu", _detector_job, *args)
+                            running[fut] = ("detector", (0, job.payload["i_ext"], i_ds, i_s, i_k, i_pp, i_det), args, 0)
+                            n += 1
         return n
+
+    runs_per_ds = len(seeds) * len(shots) * len(preprocessings) * len(detectors)
+
+    def fail_job(job: _Job, e: Exception) -> None:
+        """An accelerator job failed: record failed rows and drop the runs that depended on it."""
+        _on_failure(e, on_error, f"{job.label} on {job.device}")
+        if job.kind == "extract":
+            for i_ds, ds in enumerate(datasets):
+                rows.append(((0, job.payload["i_ext"], i_ds, -1),
+                             failed_row(ds.name, job.payload["name"], "-", "-", None, None, "extract", e)))
+            prog.skip("load")
+            prog.skip("extract", len(datasets))
+            prog.skip("detector", runs_per_ds * len(datasets))
+        else:
+            p = job.payload
+            row = failed_row(p["ds"].name, "anomalib", "-", _anomalib_name(p["spec"]), p["seed"], p["k"], "anomalib", e)
+            rows.append((p["order"], row))
+            prog.add("anomalib", time.time() - job.started)
+            _log_run(logger, prog, row, time.time() - job.started)
 
     try:
         launch()
@@ -262,24 +319,48 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
             for fut in done:
                 job = running.pop(fut)
                 if isinstance(job, tuple):  # detector run
+                    _, order, args, crashes = job
                     try:
                         row, dt = fut.result()
-                    except Exception as e:
-                        logger.error(f"FAILED: detector run {job[1]} ({type(e).__name__}: {e})")
-                        raise
-                    rows.append((job[1], row))
+                    except BrokenProcessPool as e:
+                        if crashes == 0 and on_error == "continue":  # maybe another run killed the worker: retry once
+                            logger.warning(f"A worker process died during detector run {order}; retrying it")
+                            running[submit("cpu", _detector_job, *args)] = ("detector", order, args, 1)
+                            continue
+                        _on_failure(e, on_error, f"detector run {order} (its worker process died)")
+                        row, dt = failed_row(args[3], args[4], "-", str(args[6]), args[7], args[11], "detector", e), 0.0
+                    except Exception as e:  # the worker itself failed (not the detector, caught there)
+                        _on_failure(e, on_error, f"detector run {order}")
+                        row, dt = failed_row(args[3], args[4], "-", str(args[6]), args[7], args[11], "detector", e), 0.0
+                    rows.append((order, row))
                     prog.add("detector", dt)
                     _log_run(logger, prog, row, dt)
                     continue
                 rm.release(job.id)
                 try:
                     res = fut.result()
+                except BrokenProcessPool as e:
+                    if job.crashes == 0 and on_error == "continue":
+                        # the pool breaks for every job that was running in it: retry each once, alone on its
+                        # device, so that only the job that really crashes the process is recorded as failed
+                        job.crashes, job.exclusive = 1, True
+                        logger.warning(f"A worker process died while running {job.label} on {job.device}; "
+                                       "retrying it alone")
+                        pending.appendleft(job)
+                        continue
+                    fail_job(job, RuntimeError(f"the worker process died (segfault or killed, e.g. out of host "
+                                               f"memory): {e}"))
+                    continue
                 except Exception as e:
-                    logger.error(f"FAILED: {job.label} on {job.device} ({type(e).__name__}: {e})")
-                    raise
-                if res.get("oom"):
-                    if job.exclusive:
+                    fail_job(job, e)
+                    continue
+                try:
+                    if res.get("oom") and job.exclusive:
                         raise MemoryError(f"{job.label} does not fit on {job.device} even alone: {res['error']}")
+                except Exception as e:
+                    fail_job(job, e)
+                    continue
+                if res.get("oom"):
                     logger.warning(f"Out of memory: {job.label} on {job.device}; retrying it alone on an idle device")
                     job.exclusive = True
                     pending.appendleft(job)
@@ -294,7 +375,7 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
                     for _ in feats:
                         prog.add("extract", (res["seconds"] - res["load_s"]) / max(1, len(feats)))
                     dim = next(iter(feats.values()))[0].shape[1] if feats else 0
-                    n = submit_detectors(job, feats)
+                    n = submit_detectors(job, feats, res.get("text"))
                     logger.info(f"Finished {job.label} on {job.device}: {len(feats)} dataset(s), {dim}-d, {took}{peak} "
                                 f"-> {n} detector run(s) queued · {prog.timing()}")
                 else:
@@ -309,9 +390,9 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
     except BaseException:
         for f in running:
             f.cancel()
-        acc_pool.shutdown(wait=False, cancel_futures=True)
-        cpu_pool.shutdown(wait=False, cancel_futures=True)
+        for pl in pools.values():
+            pl.shutdown(wait=False, cancel_futures=True)
         raise
-    acc_pool.shutdown()
-    cpu_pool.shutdown()
+    for pl in pools.values():
+        pl.shutdown()
     return [r for _, r in sorted(rows, key=lambda kv: kv[0])]

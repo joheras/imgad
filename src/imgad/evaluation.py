@@ -10,6 +10,7 @@ import numpy as np
 from sklearn.metrics import average_precision_score, f1_score, precision_recall_curve, roc_auc_score, roc_curve
 
 from .detectors import BaseDetector, build_detector
+from .detectors.zero_shot import needs_text
 from .features import FeatureExtractor, build_extractor
 from .preprocessing import build_preprocessing
 from .progress import BenchmarkProgress, ensure_console, fmt_duration, logger, step
@@ -117,6 +118,8 @@ def benchmark(
     devices: Union[None, str, Sequence[str]] = None,
     gpu_jobs: Union[int, str] = "auto",
     gpu_mem_gb: Optional[float] = None,
+    k_shots: Optional[Sequence[int]] = None,
+    on_error: str = "continue",
 ) -> List[Dict[str, Any]]:
     """Grid evaluation: extractor x preprocessing x detector x dataset, plus each anomalib model x
     dataset (``anomalib_models``: names or ``{"name": "patchcore", "backbone": ...}`` specs).
@@ -138,6 +141,11 @@ def benchmark(
         already configured (see :func:`imgad.progress.setup_logging`) and enables progress bars.
       * ``keep_scores``: store per-image ``scores`` and ``labels`` in each row (needed for paired tests
         such as :func:`imgad.stats.delong_vs_baseline`).
+      * ``k_shots``: few-shot protocol, e.g. ``[0, 1, 2, 4, 8, 16]``. Every configuration is run with ``k``
+        normal training images drawn per seed (column ``k_shot``; the configuration name ends in
+        ``| k-shot``), instead of the whole training set or ``train_subsample``. ``k = 0`` is zero-shot and runs
+        only detectors that need no training images (``zero_shot``); detectors that cannot fit on ``k``
+        images are recorded as failed runs.
       * ``intensity``: rule mapping images with more than 8 bits (16-bit, DICOM, NIfTI) to 8 bits for every
         extractor and Anomalib model that does not set its own (see :mod:`imgad.imageio`).
 
@@ -157,9 +165,20 @@ def benchmark(
         checkpoint size for Hub models, 4 GiB otherwise); after the first run of a model its measured
         peak is used. A job starts only when it fits in the free memory of a device.
 
+    Zero-shot detectors (:mod:`imgad.detectors.zero_shot`) run only with extractors that encode text
+    (vision–language models) and without preprocessing that changes the embeddings (``None`` or ``l2``);
+    other combinations are skipped. The prompts are encoded once per extractor.
+
+    Failures: with ``on_error="continue"`` (default) a run that fails (loading or extracting with a model,
+    fitting a detector, an Anomalib model...) is logged, recorded as a row with an ``error`` column and no
+    metrics, and the benchmark goes on with the rest; ``"raise"`` stops at the first failure.
+    :func:`successful_rows` drops failed rows; :mod:`imgad.stats` and the report ignore them.
+
     Returns a list of result rows (``pandas.DataFrame(rows)`` for a table); analyse them with
     :mod:`imgad.stats`.
     """
+    if on_error not in ("continue", "raise"):
+        raise ValueError(f"on_error must be 'continue' or 'raise', got {on_error!r}")
     ensure_console(verbose)
     rows: List[Dict[str, Any]] = []
     extractors = [_with_intensity(e, intensity) for e in extractors]
@@ -168,29 +187,48 @@ def benchmark(
     detectors = list(detectors)
     preprocessings = list(preprocessings)
     seeds = list(seeds) or [0]
+    shots = [int(k) for k in k_shots] if k_shots else [None]
+    if k_shots and train_subsample is not None:
+        logger.warning("k_shots is set: train_subsample is ignored (each run uses k training images)")
+        train_subsample = None
     opts = dict(bootstrap=bootstrap, ci_alpha=ci_alpha, keep_scores=keep_scores)
-    n_feat = len(extractors) * len(datasets) * len(seeds) * len(preprocessings) * len(detectors)
-    n_anom = len(anomalib_models) * len(datasets) * len(seeds)
+    n_feat = len(extractors) * len(datasets) * len(seeds) * len(preprocessings) * len(detectors) * len(shots)
+    n_anom = len(anomalib_models) * len(datasets) * len(seeds) * len(shots)
     prog = BenchmarkProgress({"load": len(extractors), "extract": len(extractors) * len(datasets),
                               "detector": n_feat, "anomalib": n_anom})
     _log_plan(logger, extractors, preprocessings, detectors, anomalib_models, datasets, seeds, n_feat, n_anom,
               train_subsample, bootstrap)
+    if k_shots:
+        logger.info(f"  few-shot protocol: k = {', '.join(map(str, shots))} normal training image(s) per seed")
     if check_hub_access:
         _check_hub_access(extractors, token)
     if n_jobs != 1 or devices is not None:
         from .parallel import run_parallel
 
         rows = run_parallel(extractors, detectors, datasets, preprocessings, anomalib_models, seeds, train_subsample,
-                            opts, cache_dir, n_jobs, devices, gpu_jobs, gpu_mem_gb, prog, token=token)
+                            opts, cache_dir, n_jobs, devices, gpu_jobs, gpu_mem_gb, prog, token=token, shots=shots,
+                            on_error=on_error)
         _log_end(logger, prog, rows)
         return rows
 
+    runs_per_ds = len(seeds) * len(shots) * len(preprocessings) * len(detectors)
     for i_ext, ext in enumerate(extractors, 1):
-        with step(f"Extractor {i_ext}/{len(extractors)}: building {_spec_name(ext)}", logging.INFO) as st:
-            ext = ext if isinstance(ext, FeatureExtractor) else build_extractor(ext, token=token)
-            if hasattr(ext, "_load"):
-                logger.info(f"  loading model weights ({getattr(ext, 'model_name', '')} on {getattr(ext, 'device', '?')})")
-                ext._load()
+        spec_name = _spec_name(ext)
+        try:
+            with step(f"Extractor {i_ext}/{len(extractors)}: building {spec_name}", logging.INFO) as st:
+                ext = ext if isinstance(ext, FeatureExtractor) else build_extractor(ext, token=token)
+                if hasattr(ext, "_load"):
+                    logger.info(f"  loading model weights ({getattr(ext, 'model_name', '')} on {getattr(ext, 'device', '?')})")
+                    ext._load()
+                text = text_bank(ext, detectors)
+        except Exception as e:
+            _on_failure(e, on_error, f"loading {spec_name}")
+            for ds in datasets:
+                rows.append(failed_row(ds.name, spec_name, "-", "-", None, None, "load", e))
+            prog.skip("load")
+            prog.skip("extract", len(datasets))
+            prog.skip("detector", runs_per_ds * len(datasets))
+            continue
         prog.add("load", st.seconds)
         ext_name = extractor_label(ext)
         for i_ds, ds in enumerate(datasets, 1):
@@ -198,53 +236,164 @@ def benchmark(
             cached = ext.cached_count(list(ds.train_paths) + list(ds.test_paths), cache_dir)
             msg = (f"Extracting features [extractor {i_ext}/{len(extractors)}, dataset {i_ds}/{len(datasets)}]: "
                    f"{ext_name} on {ds.name} ({n_img} images" + (f", {cached} cached" if cached else "") + ")")
-            with step(msg, logging.INFO) as st:
-                Xtr_all = ext.extract(ds.train_paths, cache_dir=cache_dir, show_progress=verbose)
-                Xte = ext.extract(ds.test_paths, cache_dir=cache_dir, show_progress=verbose)
+            try:
+                with step(msg, logging.INFO) as st:
+                    Xtr_all = ext.extract(ds.train_paths, cache_dir=cache_dir, show_progress=verbose)
+                    Xte = ext.extract(ds.test_paths, cache_dir=cache_dir, show_progress=verbose)
+            except Exception as e:
+                _on_failure(e, on_error, f"extracting {ext_name} on {ds.name}")
+                rows.append(failed_row(ds.name, ext_name, "-", "-", None, None, "extract", e))
+                prog.skip("extract")
+                prog.skip("detector", runs_per_ds)
+                continue
             t_feat = st.seconds
             prog.add("extract", t_feat)
             logger.info(f"  features: {Xtr_all.shape[1]}-d, {fmt_duration(t_feat)} · {prog.timing()}")
             for seed in seeds:
-                for pp in preprocessings:
-                    for det_spec in detectors:
-                        row, dt = _detector_run(Xtr_all, Xte, ds.test_labels, ds.name, ext_name, t_feat, det_spec,
-                                                seed, pp, train_subsample, opts)
-                        rows.append(row)
-                        prog.add("detector", dt)
-                        _log_run(logger, prog, row, dt)
+                for k in shots:
+                    for pp in preprocessings:
+                        for det_spec in detectors:
+                            row, dt = safe_detector_run(Xtr_all, Xte, ds.test_labels, ds.name, ext_name, t_feat,
+                                                        det_spec, seed, pp, train_subsample, opts, k, text, on_error)
+                            _record(rows, prog, "detector", row, dt)
     for i_m, spec in enumerate(anomalib_models, 1):
         for i_ds, ds in enumerate(datasets, 1):
             for seed in seeds:
-                t1 = time.time()
-                logger.info(f"Anomalib model {i_m}/{len(anomalib_models)} [dataset {i_ds}/{len(datasets)}, seed {seed}]: "
-                            f"{_anomalib_name(spec)} on {ds.name}")
-                row = _benchmark_anomalib(spec, ds, verbose, seed, train_subsample, **opts)
-                dt = time.time() - t1
-                rows.append(row)
-                prog.add("anomalib", dt)
-                _log_run(logger, prog, row, dt)
+                for k in shots:
+                    t1 = time.time()
+                    if k == 0:
+                        _record(rows, prog, "anomalib", None, 0.0)
+                        continue
+                    logger.info(f"Anomalib model {i_m}/{len(anomalib_models)} [dataset {i_ds}/{len(datasets)}, seed {seed}"
+                                + (f", {k}-shot" if k is not None else "") + f"]: {_anomalib_name(spec)} on {ds.name}")
+                    try:
+                        row = _benchmark_anomalib(spec, ds, verbose, seed, train_subsample, k_shot=k, **opts)
+                    except Exception as e:
+                        _on_failure(e, on_error, f"Anomalib {_anomalib_name(spec)} on {ds.name} (seed {seed})")
+                        row = failed_row(ds.name, "anomalib", "-", _anomalib_name(spec), seed, k, "anomalib", e)
+                    _record(rows, prog, "anomalib", row, time.time() - t1)
     _log_end(logger, prog, rows)
     return rows
 
 
+# ---------------------------------------------------------------------------- failures, skips, few-shot
+def successful_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Rows of runs that finished (without an ``error``)."""
+    return [r for r in rows if not r.get("error")]
+
+
+def failed_row(ds_name: str, extractor: str, pp: str, detector: str, seed, k_shot, stage: str, err) -> Dict[str, Any]:
+    row: Dict[str, Any] = {"dataset": ds_name, "extractor": extractor, "preprocessing": pp, "detector": detector,
+                           "seed": seed if seed is not None else "-"}
+    if k_shot is not None:
+        row["k_shot"] = k_shot
+    row.update(config=config_label(row), stage=stage,
+               error=err if isinstance(err, str) else f"{type(err).__name__}: {err}")
+    return row
+
+
+def config_label(row: Dict[str, Any]) -> str:
+    """``extractor | preprocessing | detector`` (``| k-shot`` in the few-shot protocol)."""
+    label = f"{row['extractor']} | {row['preprocessing']} | {row['detector']}"
+    return label + (f" | {row['k_shot']}-shot" if row.get("k_shot") is not None else "")
+
+
+def _on_failure(err: Exception, on_error: str, what: str) -> None:
+    if on_error == "raise":
+        raise err
+    logger.error(f"FAILED: {what} ({type(err).__name__}: {err}); continuing with the other runs")
+
+
+def _record(rows, prog, kind: str, row, dt: float) -> None:
+    if row is None:  # skipped combination
+        prog.skip(kind)
+        return
+    rows.append(row)
+    prog.add(kind, dt)
+    _log_run(logger, prog, row, dt)
+
+
+def text_bank(ext, detectors) -> Optional[Dict[str, Any]]:
+    """Prompt embeddings needed by the zero-shot detectors in ``detectors``, encoded with ``ext`` once
+    (``None`` if there are none, or if ``ext`` cannot encode text: those runs are then skipped)."""
+    prompts = prompts_of(detectors)
+    if not prompts:
+        return None
+    if not (hasattr(ext, "has_text_encoder") and ext.has_text_encoder()):
+        logger.info(f"  {extractor_label(ext)} has no text encoder: zero-shot detectors are skipped with it")
+        return None
+    with step(f"  encoding {len(prompts)} text prompt(s)"):
+        emb = ext.encode_text(prompts)
+    return {"emb": dict(zip(prompts, emb)), "scale": float(ext.logit_scale)}
+
+
+def prompts_of(detectors) -> List[str]:
+    out: Dict[str, None] = {}
+    for d in detectors:
+        if needs_text(d):
+            det = d if isinstance(d, BaseDetector) else build_detector(d)
+            out.update(dict.fromkeys(det.prompts()))
+    return list(out)
+
+
+def _skip_reason(det_spec, pp, k_shot, text) -> Optional[str]:
+    if needs_text(det_spec):
+        if text is None:
+            return "the extractor has no text encoder"
+        if pp and [str(p) for p in pp] != ["l2"]:
+            return "preprocessing changes the image-text embedding space"
+        return None
+    if k_shot == 0:
+        return "needs training images"
+    return None
+
+
+def safe_detector_run(Xtr_all, Xte, labels, ds_name: str, ext_name: str, t_feat: float, det_spec, seed: int, pp,
+                      train_subsample, opts, k_shot=None, text=None, on_error: str = "continue"):
+    """:func:`_detector_run` that returns ``(None, 0)`` for a skipped combination and a failed row (see
+    :func:`failed_row`) instead of raising when ``on_error="continue"``."""
+    if _skip_reason(det_spec, pp, k_shot, text):
+        return None, 0.0
+    t0 = time.time()
+    try:
+        return _detector_run(Xtr_all, Xte, labels, ds_name, ext_name, t_feat, det_spec, seed, pp, train_subsample,
+                             opts, k_shot=k_shot, text=text)
+    except Exception as e:
+        pp_name = "+".join(map(str, pp)) if pp else "-"
+        det_name = _det_name(det_spec, det_spec)
+        _on_failure(e, on_error, f"{ds_name} · seed {seed} · {ext_name} | {pp_name} | {det_name}"
+                    + (f" | {k_shot}-shot" if k_shot is not None else ""))
+        return failed_row(ds_name, ext_name, pp_name, det_name, seed, k_shot, "detector", e), time.time() - t0
+
+
 def _detector_run(Xtr_all, Xte, labels, ds_name: str, ext_name: str, t_feat: float, det_spec, seed: int, pp,
-                  train_subsample, opts) -> Tuple[Dict[str, Any], float]:
-    """One benchmark run of a feature pipeline: training subset for ``seed`` -> preprocessing -> detector
-    -> metrics. Shared by the sequential and the parallel benchmark so both give identical rows."""
+                  train_subsample, opts, k_shot: Optional[int] = None,
+                  text: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], float]:
+    """One benchmark run of a feature pipeline: training subset for ``seed`` (``k_shot`` images in the few-shot
+    protocol) -> preprocessing -> detector -> metrics. Shared by the sequential and the parallel benchmark so
+    both give identical rows. ``text``: prompt embeddings for zero-shot detectors (:func:`text_bank`)."""
     import copy
 
-    Xtr = Xtr_all[_subsample(len(Xtr_all), train_subsample, seed)]
+    size = k_shot if k_shot is not None else train_subsample
+    Xtr = Xtr_all[_subsample(len(Xtr_all), size, seed)]
     pp_name = "+".join(map(str, pp)) if pp else "-"
     t1 = time.time()
     with step(f"preprocessing {pp_name} (seed {seed}, {len(Xtr)} training images)"):
         prep = build_preprocessing(pp)
-        Ztr = prep.fit_transform(Xtr) if prep is not None else Xtr
-        Zte = prep.transform(Xte) if prep is not None else Xte
+        if prep is not None and len(Xtr):
+            Ztr, Zte = prep.fit_transform(Xtr), prep.transform(Xte)
+        else:  # no preprocessing, or zero-shot (nothing to fit on; only 'l2' gets here, the detector applies it)
+            Ztr, Zte = Xtr, Xte
     det = copy.deepcopy(det_spec) if isinstance(det_spec, BaseDetector) else build_detector(det_spec)
     _seed_detector(det, det_spec, seed)
+    if needs_text(det):
+        det.set_text(text["emb"], text["scale"])
     row = {"dataset": ds_name, "extractor": ext_name, "preprocessing": pp_name, "detector": _det_name(det_spec, det),
            "seed": seed, "n_train": len(Ztr)}
-    what = f"{ds_name} · seed {seed} · {ext_name} | {pp_name} | {row['detector']}"
+    if k_shot is not None:
+        row["k_shot"] = k_shot
+    what = f"{ds_name} · seed {seed} · {ext_name} | {pp_name} | {row['detector']}" + (
+        f" | {k_shot}-shot" if k_shot is not None else "")
     with step(f"fit {what}"):
         det.fit(Ztr)
     with step(f"score + metrics {what}"):
@@ -348,6 +497,10 @@ def _log_plan(log, extractors, preprocessings, detectors, anomalib_models, datas
 
 
 def _log_run(log, prog, row, seconds: float) -> None:
+    if row.get("error"):
+        log.error(f"{prog.counter()} {row['dataset']} · seed {row['seed']} · {row['config']}: FAILED ({row['error']}) "
+                  f"· {prog.timing()}")
+        return
     ci = f" [{row['auroc_ci_low']:.3f}, {row['auroc_ci_high']:.3f}]" if "auroc_ci_low" in row else ""
     pix = f" pixel-AUROC={row['pixel_auroc']:.4f} AUPRO={row['aupro']:.4f}" if "pixel_auroc" in row else ""
     took = f"{seconds:.2f}s" if seconds < 60 else fmt_duration(seconds)
@@ -356,8 +509,16 @@ def _log_run(log, prog, row, seconds: float) -> None:
 
 
 def _log_end(log, prog, rows) -> None:
+    failed = [r for r in rows if r.get("error")]
+    rows = successful_rows(rows)
+    if failed:
+        log.warning(f"{len(failed)} run(s) failed (rows with an 'error' column):")
+        for r in failed[:20]:
+            log.warning(f"  {r['dataset']} · {r['config']} [{r.get('stage', '?')}]: {r['error']}")
+        if len(failed) > 20:
+            log.warning(f"  … and {len(failed) - 20} more")
     if not rows:
-        log.info("Benchmark finished: no runs.")
+        log.info("Benchmark finished: no successful runs.")
         return
     by_cfg: Dict[str, List[float]] = {}
     for r in rows:
@@ -370,6 +531,8 @@ def _log_end(log, prog, rows) -> None:
 def _subsample(n: int, size: Optional[Union[float, int]], seed: int) -> np.ndarray:
     if size is None:
         return np.arange(n)
+    if isinstance(size, (int, np.integer)) and size == 0:  # zero-shot
+        return np.arange(0)
     k = int(round(size * n)) if isinstance(size, float) else int(size)
     k = max(1, min(n, k))
     return np.sort(np.random.default_rng(seed).choice(n, k, replace=False))
@@ -383,7 +546,7 @@ def _seed_detector(det: BaseDetector, spec, seed: int) -> None:
 
 
 def _add_metrics(row, y, s, pred, seed: int, bootstrap: int, ci_alpha: float, keep_scores: bool) -> None:
-    row["config"] = f"{row['extractor']} | {row['preprocessing']} | {row['detector']}"
+    row["config"] = config_label(row)
     row.update(evaluate_scores(y, s, pred))
     if bootstrap:
         from .stats import bootstrap_ci
@@ -394,11 +557,13 @@ def _add_metrics(row, y, s, pred, seed: int, bootstrap: int, ci_alpha: float, ke
         row["scores"], row["labels"] = np.asarray(s, dtype=float), np.asarray(y, dtype=int)
 
 
-def _benchmark_anomalib(spec, ds, verbose: bool, seed: int = 0, train_subsample=None, **opts) -> Dict[str, Any]:
+def _benchmark_anomalib(spec, ds, verbose: bool, seed: int = 0, train_subsample=None, k_shot: Optional[int] = None,
+                        **opts) -> Dict[str, Any]:
     from .anomalib_backend import build_anomalib_pipeline
 
     pipe = build_anomalib_pipeline(spec, seed=seed)
-    train = [ds.train_paths[i] for i in _subsample(len(ds.train_paths), train_subsample, seed)]
+    size = k_shot if k_shot is not None else train_subsample
+    train = [ds.train_paths[i] for i in _subsample(len(ds.train_paths), size, seed)]
     t0 = time.time()
     pipe.fit(train, show_progress=verbose)
     t1 = time.time()
@@ -410,6 +575,8 @@ def _benchmark_anomalib(spec, ds, verbose: bool, seed: int = 0, train_subsample=
             s, maps = pipe.score(ds.test_paths, show_progress=verbose), None
     row = {"dataset": ds.name, "extractor": "anomalib", "preprocessing": "-", "detector": _anomalib_name(spec),
            "seed": seed, "n_train": len(train)}
+    if k_shot is not None:
+        row["k_shot"] = k_shot
     _add_metrics(row, ds.test_labels, s, (s > pipe.threshold_).astype(int), seed=seed, **opts)
     row.update(threshold=float(pipe.threshold_), threshold_quantile=pipe.threshold_quantile)
     if maps is not None:
@@ -464,9 +631,11 @@ def _det_name(spec, det) -> str:
 
 def to_markdown(rows: List[Dict[str, Any]], metrics=("auroc", "aupr", "f1_max", "fpr@95tpr")) -> str:
     """Markdown table; pixel metrics are appended when some row has them."""
+    rows = successful_rows(rows)
     metrics = list(metrics) + [k for k in ("pixel_auroc", "aupro") if any(k in r for r in rows) and k not in metrics]
     seed_col = ["seed"] if len({r.get("seed", 0) for r in rows}) > 1 else []
-    cols = ["dataset", "extractor", "preprocessing", "detector", *seed_col, *metrics]
+    shot_col = ["k_shot"] if any("k_shot" in r for r in rows) else []
+    cols = ["dataset", "extractor", "preprocessing", "detector", *shot_col, *seed_col, *metrics]
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for r in rows:
         cells = (r.get(c, "-") for c in cols)

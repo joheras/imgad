@@ -283,6 +283,26 @@ grid, extracting features once per (extractor, dataset), plus each Anomalib mode
 pixel metrics when masks are available). In YAML, use the `anomalib:` key (see
 `configs/mvtec_benchmark.yaml`).
 
+A run that fails is recorded as a row with an `error` column, and the benchmark goes on with the rest.
+Failures are listed at the end of the log and in the report, and `on_error="raise"` (`--stop-on-error`)
+stops at the first one. `k_shots=[0, 1, 4, 16]` (`--k-shots`) runs every configuration with k normal
+training images per seed, for few-shot learning curves.
+
+### Zero- and few-shot detection with text prompts
+
+The `zero_shot` detector compares each image with prompts describing normal and anomalous findings. It
+works with vision–language extractors: CLIP/SigLIP, BiomedCLIP, MedSigLIP, and for the eye FLAIR and
+RetiZero (`zoo:flair-clip`, `zoo:retizero-clip`). It needs no training images; with a few normal images,
+it also uses their distance to the test image:
+
+```python
+pipe = AnomalyDetectionPipeline("zoo:flair-clip", {"name": "zero_shot", "modality": "fundus"})
+pipe.fit([])                       # zero-shot
+pipe.fit(normal_images[:4])        # 4-shot
+```
+
+See the [zero- and few-shot guide](https://joheras.github.io/imgad/guide/zero-shot/).
+
 ### Progress while the benchmark runs
 
 The benchmark reports what it is doing at every moment: the plan (datasets and number of runs), each
@@ -505,10 +525,9 @@ tests/           pytest (offline: a tiny CLIP generated locally; untrained ResNe
 
 ## Possible next steps
 
-- **Zero-/few-shot** detection with text prompts (WinCLIP, AnomalyCLIP) using the text encoder.
+- Patch-level zero-shot maps (WinCLIP windows) and learned prompts (AnomalyCLIP, MVFA adapters).
 - Native PatchCore on patch features of foundation models (CLIP/DINOv2), to compare with Anomalib's (CNN).
 - Test-time augmentation (TTA) and multi-scale aggregation.
-- Few-shot sweep (`train_subsample` = 1, 2, 4, 8… images) reusing the seeds and the tests in `imgad.stats`.
 
 ## License
 

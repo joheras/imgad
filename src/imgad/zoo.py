@@ -6,6 +6,7 @@
     build_extractor("zoo:rad-dino")                 # any card by name, also in benchmark YAML files
 
     imgad models --modality histopathology --check --yaml
+    imgad models -m fundus --zero-shot              # vision–language models for zero-shot detection
 
 Every card records how to load the model (an extractor spec), its access (public / gated), license and
 intended use. These facts come from the model cards on the Hugging Face Hub; verify them on the model page
@@ -53,6 +54,7 @@ class ModelCard:
     notes: str = ""
     reference: str = ""
     general: bool = False
+    text: bool = False                 # encodes text too: usable by the zero-shot detector
 
     @property
     def commercial_ok(self) -> bool:
@@ -106,7 +108,7 @@ CARDS: List[ModelCard] = [
         "development tool for research; outputs not for clinical decisions without validation", None,
         notes="SigLIP image encoder (448 px) trained on medical image–text pairs: chest X-ray, CT/MRI slices, "
               "dermatology, ophthalmology, histopathology.",
-        reference="google/medsiglip-448 model card",
+        reference="google/medsiglip-448 model card", text=True,
     ),
     ModelCard(
         "biomedclip",
@@ -116,7 +118,7 @@ CARDS: List[ModelCard] = [
         "research only; deployed use out of scope", 512,
         notes="CLIP ViT-B/16 trained on PMC-15M (15M figure–caption pairs from PubMed Central): broad but "
               "figure-style images. Needs open_clip.",
-        reference="Zhang et al., BiomedCLIP (arXiv 2303.00915)",
+        reference="Zhang et al., BiomedCLIP (arXiv 2303.00915)", text=True,
     ),
     # ---------------------------------------------------------------- histopathology
     ModelCard(
@@ -245,6 +247,21 @@ CARDS: List[ModelCard] = [
         reference="Qiu et al., NEJM AI 2024",
     ),
     ModelCard(
+        "flair-clip", {"type": "retina_clip", "model": "flair"}, ("ophthalmology",), "jusiro2/FLAIR", "public",
+        "Apache-2.0", "research", 512,
+        notes="FLAIR as a vision–language model: 512-d joint image embeddings and its Bio_ClinicalBERT text encoder, "
+              "for zero-shot detection with prompts (and as image features).",
+        reference="Silva-Rodríguez et al., Medical Image Analysis 2025", text=True,
+    ),
+    ModelCard(
+        "retizero-clip", {"type": "retina_clip", "model": "retizero"}, ("ophthalmology",),
+        "github.com/LooKing9218/RetiZero", "public", "no license file in the repository",
+        "research only (no license stated; ask the authors before other uses)", 512,
+        notes="RetiZero as a vision–language model (joint 512-d space, knowledge of 400+ fundus diseases), for "
+              "zero-shot detection with prompts. Weights from Google Drive.",
+        reference="Wang et al., Nature Communications 2025", text=True,
+    ),
+    ModelCard(
         "retfound-cfp-mirror", _timm("hf-hub:bitfount/RETFound_MAE", pooling="mean", data_config=_IMAGENET),
         ("ophthalmology",), "bitfount/RETFound_MAE", "public", "CC-BY-NC-4.0", "non-commercial research", 1024,
         notes="Unofficial public copy of RETFound CFP weights in timm format (bitfount). Not verified against the "
@@ -272,7 +289,7 @@ CARDS: List[ModelCard] = [
     ModelCard(
         "siglip2-base", _hf("google/siglip2-base-patch16-224"), ("*",), "google/siglip2-base-patch16-224", "public",
         "Apache-2.0", "general purpose", 768, notes="Vision–language baseline.", general=True,
-        reference="Tschannen et al., 2025",
+        reference="Tschannen et al., 2025", text=True,
     ),
 ]
 _BY_NAME = {c.name: c for c in CARDS}
@@ -304,12 +321,14 @@ def recommend(
     include_general: bool = True,
     public_only: bool = False,
     commercial: bool = False,
+    zero_shot: bool = False,
 ) -> List[ModelCard]:
     """Models to benchmark for a modality, most specific first: domain models trained on that modality
     (those covering fewer modalities first), then general-purpose baselines.
 
     ``public_only`` drops gated models; ``commercial`` drops models whose license or terms are
-    non-commercial / research-only. Without a modality, every card is returned (filters still apply).
+    non-commercial / research-only; ``zero_shot`` keeps only vision–language models (``card.text``) for the
+    zero-shot detector. Without a modality, every card is returned (filters still apply).
     A recommendation is a starting point to benchmark on your own data, not a ranking of quality.
     """
     m = modality(modality_name) if modality_name else None
@@ -318,6 +337,8 @@ def recommend(
         if public_only and c.access != "public":
             continue
         if commercial and not c.commercial_ok:
+            continue
+        if zero_shot and not c.text:
             continue
         if c.general:
             if include_general:
