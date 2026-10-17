@@ -14,7 +14,7 @@ Medical images are different from photographs, though, and this page explains ho
 ## 1. Read the images correctly
 
 ```bash
-pip install "imgad[medical]"      # pydicom + nibabel
+pip install "imgad[medical]"      # pydicom + nibabel + timm + open_clip (medical model zoo)
 ```
 
 Medical images usually have **more than 8 bits**: 12–16-bit X-ray detectors, CT in Hounsfield units, MRI
@@ -85,20 +85,56 @@ volume_score = {v: max(s) for v, s in per_volume.items()}
 ## 2. Choose a feature extractor
 
 General-purpose models (DINOv2/v3, CLIP, SigLIP) are strong baselines. Domain-specific models often do
-better, and imgad can benchmark both under the same protocol:
-
-| Model | Domain | Access | Use in imgad |
-|---|---|---|---|
-| [RAD-DINO](https://huggingface.co/microsoft/rad-dino) (Nature Machine Intelligence, 2025) | Chest X-ray | Public, research use | `"microsoft/rad-dino"` (DINOv2 backbone, 768-d) |
-| [BiomedCLIP](https://huggingface.co/microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224) | Biomedical figures (PMC-15M) | Public, research use | `{"type": "open_clip", "model_name": "hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"}` (`pip install "imgad[open_clip]"`) |
-| UNI / UNI2-h, CONCH ([Mahmood Lab](https://github.com/mahmoodlab)) · Virchow2 (Paige) | Histopathology | **Gated**; non-commercial licenses (e.g. CONCH: CC-BY-NC-ND 4.0) | Request access, then `imgad hf-login` (see [Gated models](guide/gated-models.md)). These checkpoints load through timm/their own code, not `AutoModel`: register a small extractor ([Extending](guide/pipelines.md#extending)) |
-| DINOv2 / DINOv3, SigLIP, CLIP | General | Public (DINOv3 gated) | baselines |
-
-Check the access and license of a set of models before running a long benchmark:
+better, and imgad can benchmark both under the same protocol. The **model zoo** (`imgad.zoo`) has
+ready-to-use recipes for medical feature extractors, with their access and license, and recommends a set
+to benchmark for each modality:
 
 ```bash
-imgad hf-check microsoft/rad-dino hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 MahmoodLab/UNI
+imgad models --modality histopathology            # domain models first, then general baselines
+imgad models -m cxr --public-only --check         # only public models, with your access status
+imgad models -m pathology --commercial --yaml     # exclude non-commercial licenses; YAML block for a benchmark
 ```
+
+```python
+from imgad import build_extractor, zoo
+
+for card in zoo.recommend("chest-xray"):
+    print(card.name, card.access, card.license)
+ext = build_extractor("zoo:rad-dino")             # also `- zoo:rad-dino` in a benchmark YAML
+```
+
+Modalities: `chest-xray`, `ct`, `mri`, `histopathology`, `dermatology`, `ophthalmology`, `oct`. Aliases such
+as `cxr`, `pathology` or `fundus` are accepted. Recommendations are ordered from specific to general:
+models trained on that modality only, then multi-modality medical models, then general baselines. They
+are a starting point to benchmark on your own data, not a quality ranking.
+
+| Name | Modalities | Access | License / terms | Dim | Notes |
+|---|---|---|---|---:|---|
+| `zoo:rad-dino` | chest-xray | public | MIT | 768 | DINOv2-B continued on chest X-rays from five public datasets (MIMIC-CXR, CheXpert, NIH-CXR, PadChest…); no text supervision. |
+| `zoo:medsiglip` | chest-xray, ct, mri, dermatology, ophthalmology, histopathology | gated | Health AI Developer Foundations terms | – | SigLIP image encoder (448 px) trained on medical image–text pairs: chest X-ray, CT/MRI slices, dermatology, ophthalmology, histopathology. |
+| `zoo:biomedclip` | chest-xray, ct, mri, dermatology, ophthalmology, oct, histopathology | public | MIT | 512 | CLIP ViT-B/16 trained on PMC-15M (15M figure–caption pairs from PubMed Central): broad but figure-style images. Needs open_clip. |
+| `zoo:uni2-h` | histopathology | gated | CC-BY-NC-ND-4.0 | 1536 | ViT-H/14 on >200M H&E and IHC tiles from >300k slides. |
+| `zoo:uni` | histopathology | gated | CC-BY-NC-ND-4.0 | 1024 | ViT-L/16 on ~100M tiles from ~100k H&E slides (Mass-100K). |
+| `zoo:virchow2` | histopathology | gated | CC-BY-NC-ND-4.0 | 2560 | ViT-H/14 with 4 register tokens; embedding = class token + mean patch token, as in the model card. |
+| `zoo:h-optimus-0` | histopathology | gated | Apache-2.0 | 1536 | ViT-g/14; expects 224×224 tiles at 0.5 µm/px (its own normalisation is applied by timm). |
+| `zoo:prov-gigapath` | histopathology | gated | Apache-2.0 | 1536 | Tile encoder (ViT-g) of Prov-GigaPath. |
+| `zoo:phikon-v2` | histopathology | public | Owkin non-commercial license | 1024 | DINOv2 ViT-L/16 on ~456M tiles from 60k H&E slides (TCGA, CPTAC, GTEx…). Public, no request needed. |
+| `zoo:dinov2-base` | general baseline | public | Apache-2.0 | 768 | Strong general self-supervised baseline. |
+| `zoo:dinov3-vitb16` | general baseline | gated | DINOv3 license | 768 | Newer self-supervised baseline (gated). |
+| `zoo:siglip2-base` | general baseline | public | Apache-2.0 | 768 | Vision–language baseline. |
+
+The facts above come from each model card (checked when the zoo was written). Verify them on the model page
+before relying on them, especially licenses and terms for any non-research use. `imgad hf-check` also shows
+the license declared in the model card.
+
+- **Gated models** (UNI, Virchow2, H-optimus-0, Prov-GigaPath, MedSigLIP, DINOv3) need you to request
+  access on their page and log in (`imgad hf-login`, see [Gated models](guide/gated-models.md)). Some, such
+  as UNI and Virchow2, require an institutional e-mail.
+- **Pathology models** load through timm (`{"type": "timm", ...}`, installed with `imgad[medical]`), with the
+  exact arguments from their model cards. Virchow2 uses the class token concatenated with the mean patch
+  token, as its authors recommend.
+- **Not included:** CONCH (needs its own package) and RETFound (custom checkpoints). Add any model as a
+  `timm`/`hf` spec or [register your own extractor](guide/pipelines.md#extending).
 
 !!! tip "Lesions are local"
     A single global embedding per image dilutes small findings, as it does with small industrial defects.
@@ -166,9 +202,9 @@ Most of what makes a medical evaluation credible is already in imgad, provided i
 These are natural next steps; contributions are welcome.
 
 - Patient-aware split helpers and a "sensitivity at fixed specificity" metric in reports.
-- Loaders for BMAD and MedIAnomaly, and a timm-based extractor for pathology models such as UNI.
+- Loaders for BMAD and MedIAnomaly.
 - Patch-level kNN on foundation-model features (anomaly maps without Anomalib).
 - Zero/few-shot detection with vision-language models adapted to medicine, e.g.
   [MVFA](https://openaccess.thecvf.com/content/CVPR2024/html/Huang_Adapting_Visual-Language_Models_for_Generalizable_Anomaly_Detection_in_Medical_Images_CVPR_2024_paper.html)
   (CVPR 2024).
-- Showing model licenses in `imgad hf-check` and in reports.
+- Showing model licenses in benchmark reports.

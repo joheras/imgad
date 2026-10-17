@@ -12,6 +12,7 @@
     imgad stats --results results.csv --metric auroc --cd-plot cd.png --out stats.md
     imgad hf-login                                  # token for gated Hugging Face models
     imgad hf-check facebook/dinov3-vitb16-pretrain-lvd1689m
+    imgad models --modality histopathology --check     # curated medical feature extractors
 """
 
 from __future__ import annotations
@@ -77,6 +78,9 @@ def cmd_list(args):
     print("preprocessing: l2, standard, center, pca:<n>, pca_whiten:<n>")
     am = list_anomalib_models()
     print("anomalib:  ", ", ".join(am) if am else '(not installed: pip install -e ".[anomalib]")')
+    from imgad import zoo
+
+    print("zoo:       ", ", ".join(f"zoo:{c.name}" for c in zoo.list_cards()), "(imgad models)")
 
 
 def cmd_fit(args):
@@ -315,6 +319,42 @@ def _parallel_kwargs(args, cfg) -> dict:
     return out
 
 
+def cmd_models(args):
+    from imgad import zoo
+
+    try:
+        cards = zoo.recommend(args.modality, include_general=not args.no_general, public_only=args.public_only,
+                              commercial=args.commercial)
+    except ValueError as e:
+        raise SystemExit(f"error: {e}")
+    if args.yaml:
+        print(zoo.benchmark_yaml(cards), end="")
+        return
+    title = f"Feature extractors for {zoo.modality(args.modality)}" if args.modality else "Curated feature extractors"
+    print(title + " (most specific first; benchmark them on your data):\n")
+    access = {}
+    if args.check:
+        from imgad.hub import check_access
+
+        token = _token(args)
+        access = {c.name: check_access(c.hub_id, token) for c in cards}
+    for c in cards:
+        kind = "general baseline" if c.general else ", ".join(c.modalities)
+        line = f"  zoo:{c.name:<15} {c.access:<7} {c.license:<38} {kind}"
+        if c.name in access:
+            st = access[c.name]
+            line += f"   [your access: {'ok' if st.ok else 'NO'} - {st.state}]"
+        print(line)
+        if args.verbose:
+            print(f"      hub: {c.hub_id} · dim: {c.dim or '?'} · use: {c.use}")
+            if c.notes:
+                print(f"      {c.notes}")
+    print("\nUse them as extractors: build_extractor('zoo:<name>') or `- zoo:<name>` in a benchmark YAML "
+          "(`imgad models ... --yaml` prints the block). Check licenses before any non-research use.")
+    if access and not all(st.ok for st in access.values()):
+        print("Gated models without access: `imgad hf-check <hub id>` explains how to get it.")
+
+
 def cmd_devices(args):
     from imgad.devices import GiB, ResourceManager, estimate_extractor_bytes, list_devices, resolve_devices
 
@@ -518,6 +558,18 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--cd-plot", default=None, help="save a critical-difference diagram (needs matplotlib)")
     st.add_argument("--out", default=None, help="write the report as markdown")
     st.set_defaults(func=cmd_stats)
+    md = sub.add_parser("models", help="Recommend curated feature extractors per medical imaging modality")
+    md.add_argument("--modality", "-m", default=None,
+                    help="chest-xray, ct, mri, histopathology, dermatology, ophthalmology, oct (aliases: cxr, pathology, fundus...)")
+    md.add_argument("--public-only", action="store_true", help="exclude gated models")
+    md.add_argument("--commercial", action="store_true", help="exclude non-commercial / research-only licenses")
+    md.add_argument("--no-general", action="store_true", help="exclude general-purpose baselines")
+    md.add_argument("--check", action="store_true", help="check your access to each model on the Hugging Face Hub")
+    md.add_argument("--yaml", action="store_true", help="print an `extractors:` block for a benchmark YAML")
+    md.add_argument("-v", "--verbose", action="store_true", help="show hub id, dimension, intended use and notes")
+    _add_token_arg(md)
+    md.set_defaults(func=cmd_models)
+
     dv = sub.add_parser("devices", help="Show GPUs/CPU, free memory and how a parallel benchmark would use them")
     dv.add_argument("--devices", default="auto")
     dv.add_argument("--gpu-jobs", default="auto")

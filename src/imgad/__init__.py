@@ -25,6 +25,7 @@ from .features import (
     FeatureExtractor,
     HFFeatureExtractor,
     OpenCLIPFeatureExtractor,
+    TimmFeatureExtractor,
     build_extractor,
     register_extractor,
     list_extractors,
@@ -40,15 +41,16 @@ from .pipeline import AnomalyDetectionPipeline, load_pipeline
 from .anomalib_backend import AnomalibPipeline, list_anomalib_models
 from .inference import AnomalyPredictor, Prediction
 from .evaluation import evaluate_maps, evaluate_scores, benchmark
-from . import data, hub, stats
+from . import data, hub, stats, zoo
 from .hub import GatedModelError
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "FeatureExtractor",
     "HFFeatureExtractor",
     "OpenCLIPFeatureExtractor",
+    "TimmFeatureExtractor",
     "build_extractor",
     "register_extractor",
     "list_extractors",
@@ -68,6 +70,7 @@ __all__ = [
     "benchmark",
     "data",
     "hub",
+    "zoo",
     "GatedModelError",
     "stats",
 ]

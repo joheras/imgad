@@ -42,4 +42,5 @@ imgad predict --model bottle_pc.joblib data/bottle/test --maps-dir maps/ --out p
 | `imgad report` | rebuild a report from `benchmark --scores-out` |
 | `imgad stats` | statistical comparison of saved results |
 | `imgad devices` | GPUs, free memory and memory estimate per model |
+| `imgad models` | recommended medical feature extractors per modality (`-m`), `--check`, `--yaml` ([Medical imaging](../medical.md#2-choose-a-feature-extractor)) |
 | `imgad hf-login` / `hf-logout` / `hf-check` | tokens and access to gated Hugging Face models |

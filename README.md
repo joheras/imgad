@@ -24,7 +24,7 @@ runs, confidence intervals, statistical tests and automatic markdown reports.
 pip install imgad                    # core
 pip install "imgad[anomalib]"        # + Anomalib models (PatchCore, PaDiM, EfficientAD…)
 pip install "imgad[report]"          # + figures in benchmark reports (matplotlib)
-pip install "imgad[medical]"         # + DICOM and NIfTI (pydicom, nibabel)
+pip install "imgad[medical]"         # + DICOM, NIfTI and the medical model zoo (pydicom, nibabel, timm, open_clip)
 pip install "imgad[all]"             # + open_clip, pyod, pandas, anomalib, matplotlib, pytest
 ```
 
@@ -258,7 +258,12 @@ refs = data.volume_slices("scans/", axis="z")       # NIfTI / multi-frame DICOM 
 CLI: `--intensity` in `fit` and `benchmark` (or `intensity:` in the YAML). DICOM files (`.dcm`) are read with
 their rescale slope/intercept, MONOCHROME1 is inverted, and only pixel data is read: patient metadata is
 never stored or logged. Scores of volume slices are per slice; aggregate them per volume (e.g. the maximum).
-The rule is part of the feature-cache key and of saved pipelines. See the
+The rule is part of the feature-cache key and of saved pipelines.
+
+**Medical model zoo.** `imgad models --modality histopathology` recommends feature extractors per modality
+(RAD-DINO, MedSigLIP, BiomedCLIP, UNI/UNI2-h, Virchow2, H-optimus-0, Prov-GigaPath, Phikon-v2 + general
+baselines), with access and license; use them as `build_extractor("zoo:rad-dino")` or `- zoo:uni` in a
+benchmark YAML (`--yaml` prints the block). Pathology models load through the new `timm` extractor. See the
 [documentation](https://joheras.github.io/imgad/medical/) for medical foundation models, benchmarks and
 evaluation practices.
 
