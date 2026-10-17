@@ -17,6 +17,7 @@ This work is partially supported by Agencia de Desarrollo Económico de La Rioja
 | 0.1.0 | Feature pipelines, classical detectors, Anomalib backend with anomaly maps, statistical benchmarking, markdown reports |
 | 0.2.0 | Gated and private Hugging Face models; benchmark progress reporting |
 | 0.3.0 | Parallel benchmarks with several models per GPU and memory checks |
+| 0.4.0 | 16-bit, DICOM and NIfTI images with intensity rules; medical model zoo (`imgad models`) and timm extractor; documentation website |
 
 The full history is on [GitHub releases](https://github.com/joheras/imgad/releases).
 
