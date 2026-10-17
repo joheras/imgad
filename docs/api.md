@@ -24,7 +24,15 @@ Generated from the docstrings.
 
 ::: imgad.features.open_clip.OpenCLIPFeatureExtractor
 
+::: imgad.features.timm_models.TimmFeatureExtractor
+
 ::: imgad.features.base.build_extractor
+
+## Medical model zoo
+
+::: imgad.zoo
+    options:
+      members: [recommend, get, list_cards, benchmark_yaml, ModelCard, MODALITIES]
 
 ## Detectors
 

@@ -36,10 +36,15 @@ def list_extractors() -> List[str]:
 
 
 def build_extractor(config: Dict[str, Any] | str, token=None, **kwargs) -> "FeatureExtractor":
-    """Build an extractor from ``{"type": "hf", "model_name": ...}`` or a bare HF model id. The optional
+    """Build an extractor from ``{"type": "hf", "model_name": ...}``, a bare HF model id, or a curated model
+    ``"zoo:<name>"`` (see :mod:`imgad.zoo`). The optional
     key ``"intensity"`` sets the rule for images with more than 8 bits (see :mod:`imgad.imageio`).
     ``token``: Hugging Face access token for gated/private models (passed only to extractors that
     accept one; see :mod:`imgad.hub`)."""
+    if isinstance(config, str) and config.startswith("zoo:"):
+        from ..zoo import get
+
+        config = get(config).extractor_spec()
     if isinstance(config, str):
         config = {"type": "hf", "model_name": config}
     config = {**config, **kwargs}

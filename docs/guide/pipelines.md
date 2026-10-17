@@ -27,6 +27,12 @@ For **open_clip** checkpoints (`hf-hub:laion/...`, EVA-CLIP, DataComp…):
 `OpenCLIPFeatureExtractor("hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K")`.
 
 
+**timm models** (including Hub checkpoints such as the pathology models UNI or Virchow2):
+`TimmFeatureExtractor("hf-hub:org/name", pooling="auto" | "cls" | "mean" | "cls+mean", timm_kwargs={...})`, or
+`{"type": "timm", ...}` in specs. Classes in `timm_kwargs` are given as import paths (`"torch.nn.SiLU"`) so that
+configurations stay serialisable. Ready-made medical recipes: `build_extractor("zoo:uni")`, see the
+[model zoo](../medical.md#2-choose-a-feature-extractor).
+
 Gated or private models (DINOv3, UNI, CONCH…) need a token: see [Gated Hugging Face models](gated-models.md).
 
 ## Preprocessing

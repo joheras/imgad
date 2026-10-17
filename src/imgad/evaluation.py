@@ -268,6 +268,10 @@ def _with_intensity(spec, intensity, anomalib: bool = False):
     """Apply a benchmark-wide intensity rule to a spec that does not set its own."""
     if intensity is None:
         return spec
+    if isinstance(spec, str) and spec.startswith("zoo:") and not anomalib:
+        from .zoo import get
+
+        spec = get(spec).extractor_spec()
     if isinstance(spec, str):
         return {"name": spec, "intensity": intensity} if anomalib else {"type": "hf", "model_name": spec,
                                                                          "intensity": intensity}
@@ -282,11 +286,17 @@ def _with_intensity(spec, intensity, anomalib: bool = False):
 
 def _hub_name(spec) -> Optional[str]:
     """Hub id of an extractor spec (str, dict or instance), if it loads from the Hub."""
+    if isinstance(spec, str) and spec.startswith("zoo:"):
+        from .zoo import get
+
+        return get(spec).hub_id
     if isinstance(spec, str):
         return spec
     if isinstance(spec, dict):
-        return spec.get("model_name") if spec.get("type", "hf") in ("hf", "open_clip") else None
-    return getattr(spec, "model_name", None)
+        name = spec.get("model_name") if spec.get("type", "hf") in ("hf", "open_clip", "timm") else None
+        return name.replace("hf_hub:", "hf-hub:") if isinstance(name, str) else name
+    name = getattr(spec, "model_name", None)
+    return name.replace("hf_hub:", "hf-hub:") if isinstance(name, str) else name
 
 
 def _check_hub_access(extractors, token) -> None:

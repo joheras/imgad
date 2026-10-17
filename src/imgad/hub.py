@@ -20,7 +20,7 @@ from __future__ import annotations
 import contextlib
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, List, Optional, Union
 
@@ -140,8 +140,15 @@ class AccessStatus:
     user: Optional[str] = None
     token_source: str = "none"
     detail: str = ""
+    license: Optional[str] = None   # from the model card metadata, when available
 
     def explain(self) -> str:
+        text = self._explain()
+        if self.license and self.state in ("public", "authorized", "cached", "gated"):
+            text += f" License: {self.license}."
+        return text
+
+    def _explain(self) -> str:
         url = f"https://huggingface.co/{self.repo_id}"
         if self.state == "public":
             return f"{self.repo_id}: public model, no token needed."
@@ -204,8 +211,25 @@ def is_cached(repo_id: str) -> bool:
     return False
 
 
+def _license(info) -> Optional[str]:
+    cd = getattr(info, "card_data", None)
+    lic = None
+    if cd is not None:
+        lic = cd.get("license") if hasattr(cd, "get") else getattr(cd, "license", None)
+        if lic == "other":
+            lic = (cd.get("license_name") if hasattr(cd, "get") else None) or "other (see model card)"
+    if lic is None:
+        lic = next((t.split(":", 1)[1] for t in (getattr(info, "tags", None) or []) if t.startswith("license:")), None)
+    return lic
+
+
 def check_access(repo_id: str, token: TokenLike = None) -> AccessStatus:
-    """Can this model be downloaded/loaded with the current credentials? Never raises."""
+    """Can this model be downloaded/loaded with the current credentials (and under which license, when the
+    model card declares it)? Never raises."""
+    return _check_access(repo_id, token)
+
+
+def _check_access(repo_id: str, token: TokenLike = None) -> AccessStatus:
     repo_id = _repo(repo_id)
     src = token_source(token)
     cached = is_cached(repo_id)
@@ -217,11 +241,12 @@ def check_access(repo_id: str, token: TokenLike = None) -> AccessStatus:
     except ImportError as e:  # pragma: no cover
         return AccessStatus(repo_id, cached, "error", cached=cached, token_source=src, detail=str(e))
     tok = token if token is not None else None
-    gated = private = None
+    gated = private = lic = None
     try:
         info = HfApi().model_info(repo_id, token=tok, timeout=15)
         gated = info.gated or None
         private = info.private
+        lic = _license(info)
     except GatedRepoError:
         gated = "unknown"
     except RepositoryNotFoundError:
@@ -235,16 +260,16 @@ def check_access(repo_id: str, token: TokenLike = None) -> AccessStatus:
     except GatedRepoError:
         user = whoami(token)
         state = "cached" if cached else "gated"
-        return AccessStatus(repo_id, cached, state, gated if gated != "unknown" else "manual", private, cached, user, src)
+        return replace(AccessStatus(repo_id, cached, state, gated if gated != "unknown" else "manual", private, cached, user, src), license=lic)
     except RepositoryNotFoundError:
-        return AccessStatus(repo_id, cached, "cached" if cached else "not_found", gated, private, cached, whoami(token), src)
+        return replace(AccessStatus(repo_id, cached, "cached" if cached else "not_found", gated, private, cached, whoami(token), src), license=lic)
     except Exception as e:
         if _status(e) == 401:
-            return AccessStatus(repo_id, cached, "cached" if cached else "bad_token", gated, private, cached, None, src)
-        return AccessStatus(repo_id, cached, "cached" if cached else "error", gated, private, cached, None, src, _short(e))
+            return replace(AccessStatus(repo_id, cached, "cached" if cached else "bad_token", gated, private, cached, None, src), license=lic)
+        return replace(AccessStatus(repo_id, cached, "cached" if cached else "error", gated, private, cached, None, src, _short(e)), license=lic)
     if gated or private:
-        return AccessStatus(repo_id, True, "authorized", gated, private, cached, whoami(token), src)
-    return AccessStatus(repo_id, True, "public", None, private, cached, None, src)
+        return replace(AccessStatus(repo_id, True, "authorized", gated, private, cached, whoami(token), src), license=lic)
+    return replace(AccessStatus(repo_id, True, "public", None, private, cached, None, src), license=lic)
 
 
 def _status(exc: BaseException) -> Optional[int]:

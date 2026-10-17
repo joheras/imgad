@@ -54,11 +54,12 @@ pyod = ["pyod>=1.1"]
 pandas = ["pandas>=1.5"]
 anomalib = ["anomalib>=2.0"]
 report = ["matplotlib>=3.5"]
-medical = ["pydicom>=2.4", "nibabel>=5"]
+medical = ["pydicom>=2.4", "nibabel>=5", "timm>=0.9.16", "open_clip_torch>=2.20"]   # DICOM/NIfTI + medical model zoo
+timm = ["timm>=0.9.16"]
 docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26"]
 dev = ["pytest>=7", "matplotlib>=3.5", "build", "twine"]
 all = ["open_clip_torch>=2.20", "pyod>=1.1", "pandas>=1.5", "anomalib>=2.0", "matplotlib>=3.5", "pydicom>=2.4",
-       "nibabel>=5", "pytest>=7"]
+       "nibabel>=5", "timm>=0.9.16", "pytest>=7"]
 
 [project.scripts]
 imgad = "imgad.cli:main"
