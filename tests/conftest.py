@@ -77,3 +77,18 @@ def image_folder(tmp_path):
     save(root / "cat" / "test" / "good", 8, False)
     save(root / "cat" / "test" / "scratch", 8, True)
     return root
+
+
+from imgad import BaseDetector  # noqa: E402
+
+
+class CrashingDetector(BaseDetector):
+    """Kills its process while fitting (stands in for a segfault or an out-of-memory kill in a worker)."""
+
+    def _fit(self, X):
+        import os
+
+        os._exit(3)
+
+    def _score(self, X):  # pragma: no cover
+        return X[:, 0]

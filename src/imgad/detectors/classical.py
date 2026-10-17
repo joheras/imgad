@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 import numpy as np
 
 from .base import BaseDetector, register_detector
+
+logger = logging.getLogger("imgad")
 
 
 # --------------------------------------------------------------------------- distance based
@@ -16,6 +19,8 @@ class KNNDetector(BaseDetector):
 
     aggregation: "mean" (avg of the k distances), "max"/"kth" (k-th distance) or "min".
     metric: any sklearn metric; "cosine" is a good default for L2-normalised embeddings.
+    With a single training image (1-shot) the score is the distance to it; the threshold cannot be calibrated
+    (no leave-one-out neighbour) and is 0, so recalibrate it before using ``predict``.
     """
 
     def __init__(self, k: int = 1, metric: str = "cosine", aggregation: str = "mean", threshold_quantile: float = 0.95):
@@ -25,10 +30,10 @@ class KNNDetector(BaseDetector):
     def _fit(self, X):
         from sklearn.neighbors import NearestNeighbors
 
-        if len(X) < 2:
-            raise ValueError("KNNDetector needs at least 2 training samples")
+        if len(X) < 1:
+            raise ValueError("KNNDetector needs at least 1 training sample")
         self._k = max(1, min(self.k, len(X) - 1))
-        self.nn_ = NearestNeighbors(n_neighbors=self._k + 1, metric=self.metric).fit(X)
+        self.nn_ = NearestNeighbors(n_neighbors=min(self._k + 1, len(X)), metric=self.metric).fit(X)
 
     def _agg(self, d):
         if self.aggregation == "mean":
@@ -44,6 +49,9 @@ class KNNDetector(BaseDetector):
         return self._agg(d)
 
     def _train_scores(self, X):  # leave-one-out: drop self-match
+        if len(X) == 1:
+            logger.warning("KNNDetector fitted on 1 image: its threshold cannot be calibrated (set to 0)")
+            return np.zeros(1)
         d, _ = self.nn_.kneighbors(X, n_neighbors=self._k + 1)
         return self._agg(d[:, 1:])
 

@@ -42,6 +42,7 @@ nav:
   - User guide:
       - Feature pipelines: guide/pipelines.md
       - Anomalib models and anomaly maps: guide/anomalib.md
+      - Zero- and few-shot detection: guide/zero-shot.md
       - Inference and thresholds: guide/inference.md
       - Data and image formats: guide/data.md
       - Benchmarks: guide/benchmarks.md

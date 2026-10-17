@@ -61,6 +61,7 @@ anomalous**.
 | `ensemble` | Mean of normalised detectors (z-score or rank) | |
 | `sklearn` | Wraps any sklearn estimator | `SklearnDetector(estimator=EllipticEnvelope())` |
 | `pyod` | Any PyOD model | `{"name": "pyod", "model": "ECOD"}` |
+| `zero_shot` | Text prompts (+ nearest normal images when there are some) | Vision–language extractors only; zero- and few-shot ([guide](zero-shot.md)) |
 
 **Threshold**: after `fit`, `threshold_` is set to the `threshold_quantile` (0.95 by default) of
 *out-of-sample* scores of the normal data: leave-one-out for kNN/LOF and 5-fold cross-validation for

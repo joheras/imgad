@@ -26,6 +26,8 @@ Generated from the docstrings.
 
 ::: imgad.features.timm_models.TimmFeatureExtractor
 
+::: imgad.features.retina_clip.RetinaCLIPExtractor
+
 ::: imgad.features.timm_models.load_checkpoint
 
 ::: imgad.features.timm_models.checkpoint_file
@@ -44,6 +46,10 @@ Generated from the docstrings.
 
 ::: imgad.detectors.base.build_detector
 
+::: imgad.detectors.zero_shot.ZeroShotDetector
+
+::: imgad.prompts.default_prompts
+
 ## Data and image reading
 
 ::: imgad.data
@@ -58,7 +64,7 @@ Generated from the docstrings.
 
 ::: imgad.evaluation
     options:
-      members: [benchmark, evaluate_scores, evaluate_maps, aupro, per_type_auroc]
+      members: [benchmark, successful_rows, evaluate_scores, evaluate_maps, aupro, per_type_auroc]
 
 ::: imgad.stats
     options:

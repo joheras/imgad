@@ -250,10 +250,12 @@ def read_state_dict(path: str, key: Optional[str] = None) -> Dict[str, Any]:
 
 
 def load_checkpoint(model, checkpoint: str, key: Optional[str] = None, prefix: Optional[str] = None,
-                    token: Union[None, bool, str] = None) -> List[str]:
+                    token: Union[None, bool, str] = None, state: Optional[Dict[str, Any]] = None) -> List[str]:
     """Load ``checkpoint`` into a timm ``model`` (non-strict, see the module docs); returns the model keys that
-    stayed uninitialised. Raises if almost nothing matched (wrong architecture, key or prefix)."""
-    state = read_state_dict(checkpoint_file(checkpoint, token), key)
+    stayed uninitialised. Raises if almost nothing matched (wrong architecture, key or prefix). ``state``: the
+    already-read tensors of ``checkpoint`` (to avoid reading a large file twice)."""
+    if state is None:
+        state = read_state_dict(checkpoint_file(checkpoint, token), key)
     if prefix:  # explicit: keep only that sub-model (e.g. the vision tower of a vision-language checkpoint)
         state = {k[len(prefix):]: v for k, v in state.items() if k.startswith(prefix)}
     for p in ("module.", "backbone."):

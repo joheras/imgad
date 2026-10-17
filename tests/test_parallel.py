@@ -113,12 +113,32 @@ def test_out_of_memory_job_is_retried_alone(two_categories, tmp_path, caplog):
     assert any("Out of memory" in r.getMessage() and "retrying it alone" in r.getMessage() for r in caplog.records)
 
 
-def test_parallel_failure_is_reported(two_categories, caplog):
+def test_parallel_failure_is_recorded_and_the_rest_continues(two_categories, caplog):
     ds = data.mvtec_ad(two_categories, "cat")
-    with caplog.at_level("ERROR", logger="imgad"), pytest.raises(Exception):
+    with caplog.at_level("ERROR", logger="imgad"):
+        rows = benchmark([{"type": "stats"}], [{"name": "knn", "metric": "no-such-metric"}, "mahalanobis"], [ds],
+                         n_jobs=2, devices="cpu", verbose=False)
+    failed = [r for r in rows if r.get("error")]
+    assert len(rows) == 2 and len(failed) == 1 and "auroc" not in failed[0] and failed[0]["stage"] == "detector"
+    assert [r["detector"] for r in rows if not r.get("error")] == ["mahalanobis"]
+    assert any("FAILED" in r.getMessage() for r in caplog.records)
+    with pytest.raises(Exception):
         benchmark([{"type": "stats"}], [{"name": "knn", "metric": "no-such-metric"}], [ds], n_jobs=2, devices="cpu",
-                  verbose=False)
-    assert any(r.getMessage().startswith("FAILED: detector run") for r in caplog.records)
+                  verbose=False, on_error="raise")
+
+
+def test_dead_worker_process_is_recorded_and_the_rest_continues(two_categories, caplog):
+    from conftest import CrashingDetector
+
+    ds = data.mvtec_ad(two_categories, "cat")
+    with caplog.at_level("WARNING", logger="imgad"):
+        rows = benchmark([{"type": "stats"}], [CrashingDetector(), "centroid", "mahalanobis"], [ds], n_jobs=2,
+                         devices="cpu", verbose=False)
+    ok = [r["detector"] for r in rows if not r.get("error")]
+    failed = [r for r in rows if r.get("error")]
+    assert sorted(ok) == ["centroid", "mahalanobis"]
+    assert len(failed) == 1 and "BrokenProcessPool" in failed[0]["error"] and failed[0]["dataset"] == ds.name
+    assert any("worker process died" in r.getMessage() for r in caplog.records)
 
 
 # ----------------------------------------------------------------------------- CLI

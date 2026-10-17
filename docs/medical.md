@@ -219,7 +219,7 @@ These are natural next steps; contributions are welcome.
 - Patient-aware split helpers and a "sensitivity at fixed specificity" metric in reports.
 - Loaders for BMAD and MedIAnomaly.
 - Patch-level kNN on foundation-model features (anomaly maps without Anomalib).
-- Zero/few-shot detection with vision-language models adapted to medicine, e.g.
+- Learned prompts and adapters for zero/few-shot detection, e.g.
   [MVFA](https://openaccess.thecvf.com/content/CVPR2024/html/Huang_Adapting_Visual-Language_Models_for_Generalizable_Anomaly_Detection_in_Medical_Images_CVPR_2024_paper.html)
-  (CVPR 2024).
+  (CVPR 2024). Prompt-based zero/few-shot detection is available: [guide](guide/zero-shot.md).
 - Showing model licenses in benchmark reports.

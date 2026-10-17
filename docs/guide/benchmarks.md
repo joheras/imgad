@@ -11,6 +11,31 @@ grid, extracting features once per (extractor, dataset), plus each Anomalib mode
 pixel metrics when masks are available). In YAML, use the `anomalib:` key (see
 `configs/mvtec_benchmark.yaml`).
 
+## When a run fails
+
+A run that fails is logged and recorded, and the benchmark goes on with the others. This covers a model
+that cannot be downloaded or loaded, an extraction error, a detector that cannot fit, or an Anomalib error.
+
+- A failed run becomes a row with an `error` column (the message) and a `stage` (`load`, `extract`,
+  `detector` or `anomalib`), and no metrics.
+- The end of the log lists every failure.
+- The CSV keeps the failed rows. The statistical analysis, the markdown tables and the report ignore them,
+  and the report lists them in a *Failed runs* section.
+- `successful_rows(rows)` keeps only the runs that finished.
+- `on_error="raise"` (CLI `--stop-on-error`) stops at the first failure instead.
+
+## Few-shot protocol
+
+`k_shots=[0, 1, 2, 4, 8, 16]` (YAML `k_shots:`, CLI `--k-shots 0 1 4 16`) runs every configuration with `k`
+normal training images drawn per seed, instead of the whole training set.
+
+- The rows get a `k_shot` column, and the configuration name ends in `| k-shot`.
+- `k = 0` is zero-shot: it runs only the [zero-shot detector](zero-shot.md).
+- Detectors that cannot fit on `k` images are recorded as failed runs. For example, kNN needs two images.
+- The report adds a *Few-shot learning curves* section: a table and a plot of the metric against `k`.
+
+Use several seeds: with a handful of images, the choice of images matters as much as the method.
+
 
 ## Progress while the benchmark runs
 

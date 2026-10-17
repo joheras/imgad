@@ -102,6 +102,12 @@ class BenchmarkProgress:
         if kind in ("detector", "anomalib"):
             self.runs_done += 1
 
+    def skip(self, kind: str, n: int = 1) -> None:
+        """``n`` planned units of ``kind`` will not run (skipped combination or failed prerequisite)."""
+        self.totals[kind] = max(0, self.totals.get(kind, 0) - n)
+        if kind in ("detector", "anomalib"):
+            self.n_runs = max(self.runs_done, self.n_runs - n)
+
     @property
     def elapsed(self) -> float:
         return time.time() - self.t0

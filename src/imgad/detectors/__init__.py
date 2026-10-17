@@ -14,6 +14,7 @@ from .classical import (
     PyODDetector,
     EnsembleDetector,
 )
+from .zero_shot import ZeroShotDetector
 
 __all__ = [
     "BaseDetector",
@@ -33,4 +34,5 @@ __all__ = [
     "SklearnDetector",
     "PyODDetector",
     "EnsembleDetector",
+    "ZeroShotDetector",
 ]

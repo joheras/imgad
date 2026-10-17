@@ -209,6 +209,7 @@ def cmd_benchmark(args):
     seeds = args.seeds if args.seeds is not None else cfg.get("seeds", [0])
     bootstrap = args.bootstrap if args.bootstrap is not None else cfg.get("bootstrap", 0)
     subsample = args.train_subsample if args.train_subsample is not None else cfg.get("train_subsample")
+    k_shots = args.k_shots if args.k_shots is not None else cfg.get("k_shots")
     rows = benchmark(
         extractors=cfg.get("extractors") or [],
         detectors=cfg.get("detectors") or [],
@@ -224,8 +225,11 @@ def cmd_benchmark(args):
         verbose=not args.quiet,
         intensity=args.intensity or cfg.get("intensity"),
         token=_token(args),
+        k_shots=k_shots,
+        on_error="raise" if args.stop_on_error else cfg.get("on_error", "continue"),
         **_parallel_kwargs(args, cfg),
     )
+    failed = [r for r in rows if r.get("error")]
     if args.out:
         _write_csv(rows, args.out)
         print(f"Wrote {len(rows)} rows to {args.out}")
@@ -243,11 +247,15 @@ def cmd_benchmark(args):
         print(f"Report -> {path}")
     if args.stats:
         _print_stats(rows, args.metric, cfg.get("ci_alpha", 0.05), None, None)
+    if failed:
+        print(f"\n{len(failed)} run(s) failed (rows with an 'error' column"
+              + (f" in {args.out}" if args.out else "") + "); the other runs completed.")
 
 
 def _print_stats(rows, metric: str, alpha: float, cd_plot, out, baseline=None) -> None:
     from imgad import stats
 
+    rows = [r for r in rows if not r.get("error")]
     lines = []
     if len({r.get("seed", 0) for r in rows}) > 1:
         summ = stats.summarize_seeds(rows, metrics=(metric,), alpha=alpha)
@@ -324,7 +332,7 @@ def cmd_models(args):
 
     try:
         cards = zoo.recommend(args.modality, include_general=not args.no_general, public_only=args.public_only,
-                              commercial=args.commercial)
+                              commercial=args.commercial, zero_shot=args.zero_shot)
     except ValueError as e:
         raise SystemExit(f"error: {e}")
     if args.yaml:
@@ -343,7 +351,7 @@ def cmd_models(args):
     for c in cards:
         kind = "general baseline" if c.general else ", ".join(c.modalities)
         lic = c.license if len(c.license) <= wl else c.license[: wl - 1] + "…"
-        line = f"  zoo:{c.name:<{wn}} {c.access:<7} {lic:<{wl}} {kind}"
+        line = f"  zoo:{c.name:<{wn}} {c.access:<7} {lic:<{wl}} {kind}" + ("  [text]" if c.text else "")
         if c.name in access:
             st = access[c.name]
             line += f"   [your access: {'ok' if st.ok else 'NO'} - {st.state}]"
@@ -354,6 +362,8 @@ def cmd_models(args):
                 print(f"      {c.notes}")
     print("\nUse them as extractors: build_extractor('zoo:<name>') or `- zoo:<name>` in a benchmark YAML "
           "(`imgad models ... --yaml` prints the block). Check licenses before any non-research use.")
+    if any(c.text for c in cards):
+        print("[text] = vision–language model: also usable with the zero-shot detector ({name: zero_shot, modality: ...}).")
     if access and not all(st.ok for st in access.values()):
         print("Gated models without access: `imgad hf-check <hub id>` explains how to get it.")
 
@@ -523,6 +533,11 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--train-subsample", type=_parse_value, default=None,
                    help="per-seed subset of normal training images: fraction (0.8) or count (50)")
     b.add_argument("--bootstrap", type=int, default=None, help="bootstrap resamples for AUROC/AUPR CIs (0 = off)")
+    b.add_argument("--k-shots", type=int, nargs="+", default=None, metavar="K",
+                   help="few-shot protocol: run every configuration with K normal training images "
+                        "(e.g. 0 1 4 16; 0 = zero-shot; overrides 'k_shots' in the YAML)")
+    b.add_argument("--stop-on-error", action="store_true",
+                   help="stop at the first failed run (default: record it and continue with the rest)")
     b.add_argument("--scores-out", default=None, help="save rows + per-image scores (.joblib) for paired tests")
     b.add_argument("--stats", action="store_true", help="print seed summary and statistical comparison")
     b.add_argument("--metric", default="auroc")
@@ -567,6 +582,8 @@ def build_parser() -> argparse.ArgumentParser:
     md.add_argument("--public-only", action="store_true", help="exclude gated models")
     md.add_argument("--commercial", action="store_true", help="exclude non-commercial / research-only licenses")
     md.add_argument("--no-general", action="store_true", help="exclude general-purpose baselines")
+    md.add_argument("--zero-shot", action="store_true",
+                    help="only vision–language models (usable with the zero-shot detector)")
     md.add_argument("--check", action="store_true", help="check your access to each model on the Hugging Face Hub")
     md.add_argument("--yaml", action="store_true", help="print an `extractors:` block for a benchmark YAML")
     md.add_argument("-v", "--verbose", action="store_true", help="show hub id, dimension, intended use and notes")

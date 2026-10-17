@@ -1,6 +1,9 @@
 """Extractor for OpenCLIP checkpoints (many LAION / DataComp / EVA CLIP models on the HF Hub are
 published in open_clip format, e.g. ``hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K``).
 
+Vision–language models also encode text (:meth:`encode_text`), which the zero-shot detector uses
+(:mod:`imgad.detectors.zero_shot`).
+
 Requires ``pip install open_clip_torch``.
 """
 
@@ -62,6 +65,26 @@ class OpenCLIPFeatureExtractor(FeatureExtractor):
         if self.normalize:
             f = torch.nn.functional.normalize(f, dim=-1)
         return f.cpu().numpy()
+
+    # ------------------------------------------------------------------ text (zero-shot)
+    def has_text_encoder(self) -> bool:
+        return True
+
+    def encode_text(self, prompts: List[str]) -> np.ndarray:
+        """L2-normalised text embeddings in the same space as the image features."""
+        import open_clip
+        import torch
+
+        self._load()
+        tokenizer = open_clip.get_tokenizer(self.model_name)
+        with torch.inference_mode():
+            t = self._model.encode_text(tokenizer(list(prompts)).to(self.device)).float()
+        return torch.nn.functional.normalize(t, dim=-1).cpu().numpy()
+
+    @property
+    def logit_scale(self) -> float:
+        self._load()
+        return float(self._model.logit_scale.detach().exp()) if hasattr(self._model, "logit_scale") else 100.0
 
     def __getstate__(self):
         state = dict(self.__dict__)

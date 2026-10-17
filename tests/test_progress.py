@@ -4,7 +4,8 @@ import shutil
 import pytest
 import yaml
 
-from imgad import BaseDetector, benchmark, data, register_detector
+from imgad import BaseDetector, benchmark, data, register_detector, successful_rows
+from imgad.evaluation import to_markdown
 from imgad.cli import main
 from imgad.progress import BenchmarkProgress, fmt_duration
 
@@ -65,9 +66,24 @@ class _Broken(BaseDetector):
 def test_failed_step_is_logged(two_categories, caplog):
     ds = data.mvtec_ad(two_categories, "cat")
     with caplog.at_level(logging.ERROR, logger="imgad"), pytest.raises(ValueError, match="boom"):
-        benchmark([{"type": "stats"}], ["broken_test_detector"], [ds], verbose=False)
+        benchmark([{"type": "stats"}], ["broken_test_detector"], [ds], verbose=False, on_error="raise")
     failed = [r.getMessage() for r in caplog.records if r.getMessage().startswith("FAILED")]
     assert failed == ["FAILED: fit mvtec/cat · seed 0 · stats | - | broken_test_detector (ValueError: boom)"]
+
+
+def test_failed_run_does_not_stop_the_benchmark(two_categories, caplog):
+    ds = data.mvtec_ad(two_categories, "cat")
+    with caplog.at_level(logging.WARNING, logger="imgad"):
+        rows = benchmark([{"type": "stats"}, {"type": "hf", "model_name": "/no/such/model"}],
+                         ["broken_test_detector", "centroid"], [ds], verbose=False)
+    ok = successful_rows(rows)
+    assert [r["detector"] for r in ok] == ["centroid"]
+    errors = {(r["extractor"], r["detector"], r["stage"]) for r in rows if r.get("error")}
+    assert ("stats", "broken_test_detector", "detector") in errors
+    assert any(e[2] == "load" for e in errors)                              # the extractor that cannot be loaded
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("continuing with the other runs" in m for m in msgs) and any("run(s) failed" in m for m in msgs)
+    assert "broken_test_detector" not in to_markdown(rows)                  # tables ignore failed runs
 
 
 def _cfg(tmp_path, root):

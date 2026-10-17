@@ -18,9 +18,11 @@ def test_cards_are_consistent():
         assert c.access in ("public", "gated") and c.license and c.use
         assert c.general == (c.modalities == ("*",))
         assert c.general or set(c.modalities) <= set(zoo.MODALITIES)
-        assert c.spec["type"] in ("hf", "open_clip", "timm")
+        assert c.spec["type"] in ("hf", "open_clip", "timm", "retina_clip")
         ext = build_extractor(f"zoo:{c.name}", device="cpu")          # lazy: weights are not loaded
-        if "checkpoint" in c.spec:                                     # raw checkpoint into a timm architecture
+        if c.spec["type"] == "retina_clip":                            # vision–language retinal models
+            assert c.text and ext.model_name == f"{c.spec['model']}-clip"
+        elif "checkpoint" in c.spec:                                     # raw checkpoint into a timm architecture
             assert ext.checkpoint == c.spec["checkpoint"] and ext.data_config == c.spec.get("data_config", {})
         else:
             assert ext.model_name.endswith(c.hub_id.split("/")[-1]) or c.hub_id.lower() in ext.model_name.lower()
@@ -47,7 +49,10 @@ def test_ophthalmology_recommendations():
     assert fundus.index("urfound") < fundus.index("medsiglip") < fundus.index("biomedclip")   # fewer modalities first
     oct_ = [c.name for c in zoo.recommend("oct", include_general=False)]
     assert oct_[:3] == ["retfound-oct", "visionfm-oct", "retfound-oct-mirror"] and "retfound-cfp" not in oct_
-    assert [c.name for c in zoo.recommend("cfp", include_general=False, commercial=True)][:2] == ["flair", "urfound"]
+    assert [c.name for c in zoo.recommend("cfp", include_general=False, commercial=True)][:3] == ["flair", "flair-clip",
+                                                                                                    "urfound"]
+    assert [c.name for c in zoo.recommend("fundus", zero_shot=True, include_general=False)][:2] == ["flair-clip",
+                                                                                                     "retizero-clip"]
     retizero = zoo.get("retizero")
     assert not retizero.commercial_ok and retizero.spec["checkpoint"].startswith("gdrive:")
     assert _hub_name("zoo:retfound-cfp") == "YukunZhou/RETFound_mae_natureCFP"                # gated: access checked

@@ -182,9 +182,52 @@ class HFFeatureExtractor(FeatureExtractor):
         mode = "cls" if self._pooling == "pooler" else self._pooling
         return torch.cat([_token_pool(out.hidden_states[l], mode) for l in layers], dim=-1)
 
+    # ------------------------------------------------------------------ text (zero-shot)
+    def has_text_encoder(self) -> bool:
+        """True for dual encoders (CLIP, SigLIP...) used with ``pooling="projection"`` (or ``"auto"``), whose
+        image features share a space with text."""
+        self._load()
+        return self._pooling == "projection" and hasattr(self._model, "get_text_features")
+
+    def encode_text(self, prompts: List[str]) -> np.ndarray:
+        """L2-normalised text embeddings in the same space as the image features."""
+        import torch
+        from transformers import AutoProcessor, AutoTokenizer
+
+        if not self.has_text_encoder():
+            raise TypeError(f"{self.model_name} (pooling={self.pooling!r}) has no text encoder aligned with its "
+                            "image features; zero-shot detection needs a CLIP/SigLIP-style model with "
+                            "pooling='projection'.")
+        if getattr(self, "_tokenizer", None) is None:
+            kw = dict(revision=self.revision, trust_remote_code=self.trust_remote_code)
+            if self._token is not None:
+                kw["token"] = self._token
+            try:
+                tok = self._from_pretrained(AutoTokenizer, kw)
+            except GatedModelError:
+                raise
+            except Exception:
+                tok = getattr(self._from_pretrained(AutoProcessor, kw), "tokenizer")
+            self._tokenizer = tok
+        cfg = self._model.config
+        tkw: Dict[str, Any] = dict(padding=True, truncation=True, return_tensors="pt")
+        if getattr(cfg, "model_type", "") in ("siglip", "siglip2"):  # trained with fixed-length padding
+            tkw.update(padding="max_length", max_length=getattr(cfg.text_config, "max_position_embeddings", 64))
+        inputs = self._tokenizer(list(prompts), **tkw).to(self.device)
+        with torch.inference_mode():
+            t = _to_tensor(self._model.get_text_features(**inputs), text=True).float()
+        return torch.nn.functional.normalize(t, dim=-1).cpu().numpy()
+
+    @property
+    def logit_scale(self) -> float:
+        self._load()
+        s = getattr(self._model, "logit_scale", None)
+        return float(s.detach().exp()) if s is not None else 100.0
+
     def __getstate__(self):
         state = dict(self.__dict__)
         state["_token"] = None  # pickles (e.g. sent to worker processes) never carry the access token
+        state["_tokenizer"] = None
         return state
 
     def get_config(self) -> Dict[str, Any]:
@@ -203,13 +246,14 @@ class HFFeatureExtractor(FeatureExtractor):
         )
 
 
-def _to_tensor(out):
-    """``get_image_features`` returns a tensor in transformers 4.x and may return a ModelOutput in 5.x."""
+def _to_tensor(out, text: bool = False):
+    """``get_image_features`` / ``get_text_features`` return a tensor in transformers 4.x and may return a
+    ModelOutput in 5.x."""
     import torch
 
     if isinstance(out, torch.Tensor):
         return out
-    for attr in ("image_embeds", "pooler_output"):
+    for attr in ("text_embeds" if text else "image_embeds", "pooler_output"):
         v = getattr(out, attr, None)
         if v is not None:
             return v

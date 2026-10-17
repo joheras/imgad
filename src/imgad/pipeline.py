@@ -12,6 +12,7 @@ import numpy as np
 from .detectors import BaseDetector, build_detector
 from .features import FeatureExtractor, build_extractor
 from .preprocessing import Step, build_preprocessing
+from .utils import as_list
 
 _FORMAT_VERSION = 2
 
@@ -127,8 +128,20 @@ class AnomalyDetectionPipeline(ThresholdMixin):
 
     # ----------------------------------------------------------------- images API
     def fit(self, images, **kw) -> "AnomalyDetectionPipeline":
-        """Fit on **normal** images only."""
+        """Fit on **normal** images only. With a zero-shot detector ``images`` may be empty (``[]``: zero-shot,
+        text prompts only) or a few normal images (few-shot)."""
+        if getattr(self.detector, "needs_text", False):
+            self._bind_text()
+            if images is None or len(as_list(images)) == 0:
+                return self.fit_features(np.zeros((0, self.detector.text_.shape[1])))
         return self.fit_features(self.extract(images, **kw))
+
+    def _bind_text(self) -> None:
+        if self.preprocessing_steps and [str(p) for p in self.preprocessing_steps] != ["l2"]:
+            raise ValueError("zero-shot detectors compare image and text embeddings: only the 'l2' preprocessing "
+                             f"keeps them comparable, got {self.preprocessing_steps}")
+        if self.detector.text_ is None:
+            self.detector.bind(self.extractor)
 
     def score(self, images, **kw) -> np.ndarray:
         return self.score_features(self.extract(images, **kw))
@@ -138,18 +151,23 @@ class AnomalyDetectionPipeline(ThresholdMixin):
 
     # ----------------------------------------------------------------- features API
     def fit_features(self, X: np.ndarray) -> "AnomalyDetectionPipeline":
-        if self.preprocessing is not None:
+        if getattr(self.detector, "needs_text", False):
+            self._bind_text()
+        if self.preprocessing is not None and len(X):
             X = self.preprocessing.fit_transform(X)
         self.detector.fit(X)
         self.metadata.update(
             n_train=int(X.shape[0]),
             feature_dim=int(X.shape[1]),
             trained_at=_dt.datetime.now().isoformat(timespec="seconds"),
-            threshold_source=f"quantile {self.detector.threshold_quantile} of normal training scores",
+            threshold_source=(f"quantile {self.detector.threshold_quantile} of normal training scores" if len(X)
+                              else "zero-shot: 0.5 on the probability of the anomalous prompts"),
         )
         return self
 
     def _transform(self, X):
+        if self.preprocessing is not None and getattr(self.detector, "needs_text", False) and not self.metadata.get("n_train"):
+            return X  # zero-shot: nothing was fitted; 'l2' is applied by the detector itself
         return self.preprocessing.transform(X) if self.preprocessing is not None else X
 
     def score_features(self, X: np.ndarray) -> np.ndarray:
