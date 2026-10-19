@@ -70,3 +70,9 @@ imgad predict --model bottle.joblib new_images/ --out predictions.csv
 ```
 
 Next: [Getting started](getting-started.md).
+
+## Acknowledgements
+
+This work is partially supported by Agencia de Desarrollo Económico de La Rioja [ADER 2022-I-IDI-00015].
+
+
