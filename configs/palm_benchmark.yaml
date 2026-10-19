@@ -1,0 +1,108 @@
+# One-class benchmark on PALM (pathologic myopia, Fang et al., Sci. Data 2024): the same grid as the
+# myopia benchmark in benchmarks/ophtalmology/, so both datasets can be compared and ranked together.
+#
+# 1. Download PALM (https://doi.org/10.6084/m9.figshare.c.6224616.v1) and extract it, then lay it out:
+#      python benchmarks/palm/prepare_palm.py --palm /data/PALM --out /data/palm_imgad --lesion-masks
+#    (add --crop-fov for the field-of-view ablation, into another --out folder)
+# 2. Set data.root below to the --out folder and run:
+#      imgad benchmark --config configs/palm_benchmark.yaml --out benchmarks/palm/results.csv \
+#        --scores-out benchmarks/palm/scores.joblib --report benchmarks/palm/report --stats \
+#        -j 8 --devices auto --hf-token-file token
+# 3. Choose the configuration on the validation set and report it on the test set:
+#      python benchmarks/palm/select_on_validation.py benchmarks/palm/results.csv
+#
+# Normal = no pathologic myopia (includes high myopia without PM); anomalous = PM. Every category is
+# fitted on the same 187 non-PM training images (80% per seed). palm-val holds the 400 validation images
+# (model selection), palm-test the 400 test images (final evaluation, never used to choose anything).
+
+data:
+  type: mvtec
+  root: /path/to/palm_imgad
+  categories: [palm-val, palm-test]
+  # categories: [palm-val, palm-test, palm-lesion]   # + pixel metrics of Anomalib maps on lesion masks
+
+cache_dir: .feature_cache
+
+seeds: [0, 1, 2]
+train_subsample: 0.8
+bootstrap: 1000
+ci_alpha: 0.05
+on_error: continue
+
+extractors:
+  - zoo:retfound-green
+  - zoo:visionfm-fundus
+  - zoo:flair
+  - zoo:urfound
+  - zoo:retizero
+  - zoo:retfound-cfp-mirror
+  - zoo:flair-clip
+  - zoo:retizero-clip
+  - zoo:biomedclip
+  - zoo:dinov2-base
+  - zoo:siglip2-base
+  - zoo:retfound-cfp
+  - zoo:retfound-dinov2
+  - zoo:medsiglip
+  - zoo:dinov3-vitb16
+
+preprocessing:
+  - [l2]
+  - [l2, pca:0.95]
+
+detectors:
+  - {name: knn, k: 1}
+  - {name: knn, k: 5}
+  - mahalanobis
+  - centroid
+  - {name: kmeans, n_clusters: 8}
+  - lof
+  - gmm
+  - kde
+  - ocsvm
+  - iforest
+  - pca
+  - name: ensemble
+    members: [{name: knn, k: 1}, mahalanobis]
+  # Text prompts (vision-language extractors only). As in the myopia benchmark: generic fundus prompts,
+  # combined with the 1-NN visual score because training images are available.
+  - {name: zero_shot, modality: fundus}
+  # Prompts naming myopic findings, text only (true zero-shot: the training images are not used).
+  - name: zero_shot
+    modality: fundus
+    mode: text
+    normal: [a healthy retina, a normal fundus, a tessellated fundus without atrophy, a myopic fundus without lesions]
+    anomalous: [pathologic myopia, myopic maculopathy, diffuse chorioretinal atrophy, patchy chorioretinal atrophy,
+                macular atrophy, lacquer cracks, myopic choroidal neovascularization, a posterior staphyloma]
+  # The same myopic prompts combined with the 1-NN visual score.
+  - name: zero_shot
+    modality: fundus
+    mode: both
+    normal: [a healthy retina, a normal fundus, a tessellated fundus without atrophy, a myopic fundus without lesions]
+    anomalous: [pathologic myopia, myopic maculopathy, diffuse chorioretinal atrophy, patchy chorioretinal atrophy,
+                macular atrophy, lacquer cracks, myopic choroidal neovascularization, a posterior staphyloma]
+
+anomalib:
+  - {name: patchcore, image_size: 256}
+  - {name: mhpatchcore, image_size: 256}
+  - {name: padim, image_size: 256}
+  - {name: dfm, image_size: 256}
+  - {name: anomalydino, image_size: 256}
+  - {name: cflow, image_size: 256, max_epochs: 20}
+  - {name: fastflow, image_size: 256, max_epochs: 20}
+  - {name: uflow, image_size: 256, max_epochs: 20}
+  - {name: stfpm, image_size: 256, max_epochs: 20}
+  - {name: reverse_distillation, image_size: 256, max_epochs: 20}
+  - {name: uninet, image_size: 256, max_epochs: 20}
+  - {name: draem, image_size: 256, max_epochs: 20}
+  - {name: supersimplenet, image_size: 256, max_epochs: 20}
+  - {name: glass, image_size: 256, max_epochs: 20}
+  - {name: generalad, image_size: 256, max_epochs: 20}
+  - {name: foundad, image_size: 224, max_epochs: 20}
+  - {name: rad, image_size: 256}
+  - {name: patchflow, image_size: 256, max_epochs: 20}
+  - {name: l2bt, image_size: 224, max_epochs: 20}
+  # Resolution ablation for the end-to-end models (reviewers will ask whether 256 px is unfair to them):
+  # - {name: patchcore, image_size: 512}
+  # - {name: anomalydino, image_size: 448}
+  # - {name: padim, image_size: 512}
