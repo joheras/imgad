@@ -238,10 +238,34 @@ def main(argv: Optional[List[str]] = None) -> int:
     a = ap.parse_args(argv)
 
     root = a.palm.resolve()
+    if not root.is_dir():
+        print(f"ERROR: --palm {a.palm} does not exist or is not a folder. Pass the folder where you extracted "
+              "PALM (the one that contains the training, validation and test sets).", file=sys.stderr)
+        return 1
+    try:
+        a.out.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"ERROR: cannot create --out {a.out} ({e.strerror}). Choose a folder you can write to, "
+              "e.g. --out ~/palm_imgad.", file=sys.stderr)
+        return 1
+
     print(f"Reading {root}")
     images = find_images(root)
     labels = read_labels(root, images)
     info = read_supplementary(root, images)
+
+    if not labels:
+        n_img = sum(len(v) for v in images.values())
+        print(f"ERROR: no labelled images found under {root} ({n_img} images in training/validation/test "
+              "folders).", file=sys.stderr)
+        zips = sorted(p.relative_to(root) for p in root.rglob("*") if p.suffix.lower() == ".zip")
+        if zips:
+            print("  The release is still compressed; extract these files and run again:", file=sys.stderr)
+            for z in zips[:10]:
+                print(f"    {z}", file=sys.stderr)
+        top = sorted(p.name + ("/" if p.is_dir() else "") for p in root.iterdir())
+        print("  Contents of --palm: " + (", ".join(top[:20]) or "(empty)"), file=sys.stderr)
+        return 1
 
     problems = []
     for sp in SPLITS:
