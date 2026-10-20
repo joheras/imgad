@@ -15,6 +15,10 @@ Scheduling:
   jobs of the same model). If it still runs out of memory, it is retried alone on an idle device.
 * As soon as the features of an extractor are ready, its detector runs (dataset × seed × preprocessing
   × detector) are submitted to the CPU pool, while the GPU moves on to the next model.
+* If a worker process dies (segfault, killed for lack of host memory...), the whole CPU pool breaks and
+  every run in it fails with it. At most ``2 × n_jobs`` detector runs are handed to the pool at a time, so
+  only those are affected; each is retried alone in a separate one-process pool, and only a run that kills
+  its process even alone is recorded as failed.
 * Rows are returned in the same order as the sequential benchmark and are identical to it (apart from
   the timing columns).
 """
@@ -221,7 +225,7 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
     learned: Dict[Tuple, int] = {}
 
     ctx = mp.get_context("spawn")
-    sizes = {"acc": (rm.total_capacity(), acc_threads), "cpu": (n_cpu, 1)}
+    sizes = {"acc": (rm.total_capacity(), acc_threads), "cpu": (n_cpu, 1), "solo": (1, 1)}
     pools: Dict[str, ProcessPoolExecutor] = {}
 
     def pool(kind: str, renew: bool = False) -> ProcessPoolExecutor:
@@ -242,6 +246,23 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
             return pool(kind, renew=True).submit(fn, *args)
 
     running: Dict[Future, Any] = {}
+    # detector runs wait here and are handed to the CPU pool a few at a time, so that a dead worker process only
+    # takes down those few; the runs it took down are then retried one by one in the "solo" pool
+    det_queue: deque = deque()
+    solo_queue: deque = deque()
+    det_in_flight = {"cpu": 0, "solo": 0}
+    max_in_flight = 2 * n_cpu
+
+    def pump_detectors() -> None:
+        while solo_queue and det_in_flight["solo"] == 0:
+            order, args = solo_queue.popleft()
+            running[submit("solo", _detector_job, *args)] = ("detector", order, args, "solo")
+            det_in_flight["solo"] += 1
+        while det_queue and det_in_flight["cpu"] < max_in_flight:
+            order, args = det_queue.popleft()
+            running[submit("cpu", _detector_job, *args)] = ("detector", order, args, "cpu")
+            det_in_flight["cpu"] += 1
+
     rows: List[Tuple[Tuple, Dict[str, Any]]] = []
 
     def launch() -> None:
@@ -288,9 +309,9 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
                                 continue
                             args = (Xtr, Xte, ds.test_labels, ds.name, job.payload["name"], t_feat, det_spec, seed, pp,
                                     train_subsample, opts, k, text, on_error)
-                            fut = submit("cpu", _detector_job, *args)
-                            running[fut] = ("detector", (0, job.payload["i_ext"], i_ds, i_s, i_k, i_pp, i_det), args, 0)
+                            det_queue.append(((0, job.payload["i_ext"], i_ds, i_s, i_k, i_pp, i_det), args))
                             n += 1
+        pump_detectors()
         return n
 
     runs_per_ds = len(seeds) * len(shots) * len(preprocessings) * len(detectors)
@@ -319,13 +340,16 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
             for fut in done:
                 job = running.pop(fut)
                 if isinstance(job, tuple):  # detector run
-                    _, order, args, crashes = job
+                    _, order, args, kind = job
+                    det_in_flight[kind] -= 1
                     try:
                         row, dt = fut.result()
                     except BrokenProcessPool as e:
-                        if crashes == 0 and on_error == "continue":  # maybe another run killed the worker: retry once
-                            logger.warning(f"A worker process died during detector run {order}; retrying it")
-                            running[submit("cpu", _detector_job, *args)] = ("detector", order, args, 1)
+                        if kind == "cpu" and on_error == "continue":
+                            # maybe another run killed the worker: retry it alone, where a crash can only be its own
+                            logger.warning(f"A worker process died during detector run {order}; retrying it alone")
+                            solo_queue.append((order, args))
+                            pump_detectors()
                             continue
                         _on_failure(e, on_error, f"detector run {order} (its worker process died)")
                         row, dt = failed_row(args[3], args[4], "-", str(args[6]), args[7], args[11], "detector", e), 0.0
@@ -335,6 +359,7 @@ def run_parallel(extractors, detectors, datasets, preprocessings, anomalib_model
                     rows.append((order, row))
                     prog.add("detector", dt)
                     _log_run(logger, prog, row, dt)
+                    pump_detectors()
                     continue
                 rm.release(job.id)
                 try:
