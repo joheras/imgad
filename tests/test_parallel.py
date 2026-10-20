@@ -141,6 +141,18 @@ def test_dead_worker_process_is_recorded_and_the_rest_continues(two_categories, 
     assert any("worker process died" in r.getMessage() for r in caplog.records)
 
 
+def test_dead_worker_process_does_not_take_down_runs_retried_with_it(two_categories):
+    """The runs a dead worker takes down are retried alone: the crashing run must not break their retries again."""
+    from conftest import CrashingDetector
+
+    ds = data.mvtec_ad(two_categories, "cat")
+    dets = ["centroid", "mahalanobis", "knn", "iforest", CrashingDetector(), "centroid", "mahalanobis", "knn"]
+    rows = benchmark([{"type": "stats"}], dets, [ds], n_jobs=2, devices="cpu", verbose=False,
+                     preprocessings=[None, ["standard"]])
+    failed = [r["detector"] for r in rows if r.get("error")]
+    assert len(rows) == 16 and len(failed) == 2 and all(d.startswith("CrashingDetector") for d in failed)
+
+
 # ----------------------------------------------------------------------------- CLI
 def test_cli_parallel_options_and_devices(two_categories, tmp_path, capsys):
     cfg = tmp_path / "b.yaml"
