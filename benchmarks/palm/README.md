@@ -40,11 +40,25 @@ found. Images are symlinked; `--copy` copies them. `--crop-fov` writes copies cr
 (masks cropped the same way), for the cropping ablation: lay it out into another folder and run the same
 YAML with `data.root` pointing there.
 
+## Results
+
+The run of 2026-10-20 is in [`report/`](report/): the imgad report (`report.md`, figures), `results.csv`
+(one row per dataset × configuration × seed), the configuration used, and [`selection.md`](report/selection.md)
+from `select_on_validation.py`.
+
+- Chosen on validation: RetiZero image encoder (`vit_large_patch16_224[cls]`) + L2 + LOF, validation AUROC
+  0.995, **test AUROC 0.989** (95% CI 0.982–0.995). The best configuration on test would give 0.996, so
+  choosing on the test set inflates the result by 0.007. Validation and test AUROC have a Spearman
+  correlation of 0.956 over the 370 configurations.
+- With the threshold calibrated on normal images, 0.2% false positives and 74% sensitivity on test.
+- Best Anomalib models: RAD 0.992 and DFM 0.989 on test. Median over methods: 0.989 for extractors with their
+  best detector, 0.944 for Anomalib models.
+- The report's Friedman/Nemenyi section treats `palm-val` and `palm-test` as two independent datasets.
+  They share the training images, so read it with care.
+
 ## What the YAML adds to the myopia benchmark
 
 - Two text-prompt variants naming myopic findings (atrophy, lacquer cracks, myopic CNV, staphyloma): one
   text-only (true zero-shot, `mode: text`) and one combined with the 1-NN visual score (`mode: both`).
 - Commented-out Anomalib runs at 448–512 px, for the resolution ablation.
 
-The scripts were tested on a simulated PALM with the same folder structure, labels and inverted BMP
-masks as the Figshare release, not yet on the real download.

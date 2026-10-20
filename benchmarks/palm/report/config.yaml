@@ -1,0 +1,143 @@
+data:
+  type: mvtec
+  root: /home/coco/PALM/imgad/data/palm_imgad
+  categories:
+  - palm-val
+  - palm-test
+cache_dir: .feature_cache
+seeds:
+- 0
+- 1
+- 2
+train_subsample: 0.8
+bootstrap: 1000
+ci_alpha: 0.05
+on_error: continue
+extractors:
+- zoo:retfound-green
+- zoo:visionfm-fundus
+- zoo:flair
+- zoo:urfound
+- zoo:retizero
+- zoo:retfound-cfp-mirror
+- zoo:flair-clip
+- zoo:retizero-clip
+- zoo:biomedclip
+- zoo:dinov2-base
+- zoo:siglip2-base
+- zoo:retfound-cfp
+- zoo:retfound-dinov2
+- zoo:medsiglip
+- zoo:dinov3-vitb16
+preprocessing:
+- - l2
+- - l2
+  - pca:0.95
+detectors:
+- name: knn
+  k: 1
+- name: knn
+  k: 5
+- mahalanobis
+- centroid
+- name: kmeans
+  n_clusters: 8
+- lof
+- gmm
+- kde
+- ocsvm
+- iforest
+- pca
+- name: ensemble
+  members:
+  - name: knn
+    k: 1
+  - mahalanobis
+- name: zero_shot
+  modality: fundus
+- name: zero_shot
+  modality: fundus
+  mode: text
+  normal:
+  - a healthy retina
+  - a normal fundus
+  - a tessellated fundus without atrophy
+  - a myopic fundus without lesions
+  anomalous:
+  - pathologic myopia
+  - myopic maculopathy
+  - diffuse chorioretinal atrophy
+  - patchy chorioretinal atrophy
+  - macular atrophy
+  - lacquer cracks
+  - myopic choroidal neovascularization
+  - a posterior staphyloma
+- name: zero_shot
+  modality: fundus
+  mode: both
+  normal:
+  - a healthy retina
+  - a normal fundus
+  - a tessellated fundus without atrophy
+  - a myopic fundus without lesions
+  anomalous:
+  - pathologic myopia
+  - myopic maculopathy
+  - diffuse chorioretinal atrophy
+  - patchy chorioretinal atrophy
+  - macular atrophy
+  - lacquer cracks
+  - myopic choroidal neovascularization
+  - a posterior staphyloma
+anomalib:
+- name: patchcore
+  image_size: 256
+- name: mhpatchcore
+  image_size: 256
+- name: padim
+  image_size: 256
+- name: dfm
+  image_size: 256
+- name: anomalydino
+  image_size: 256
+- name: cflow
+  image_size: 256
+  max_epochs: 20
+- name: fastflow
+  image_size: 256
+  max_epochs: 20
+- name: uflow
+  image_size: 256
+  max_epochs: 20
+- name: stfpm
+  image_size: 256
+  max_epochs: 20
+- name: reverse_distillation
+  image_size: 256
+  max_epochs: 20
+- name: uninet
+  image_size: 256
+  max_epochs: 20
+- name: draem
+  image_size: 256
+  max_epochs: 20
+- name: supersimplenet
+  image_size: 256
+  max_epochs: 20
+- name: glass
+  image_size: 256
+  max_epochs: 20
+- name: generalad
+  image_size: 256
+  max_epochs: 20
+- name: foundad
+  image_size: 224
+  max_epochs: 20
+- name: rad
+  image_size: 256
+- name: patchflow
+  image_size: 256
+  max_epochs: 20
+- name: l2bt
+  image_size: 224
+  max_epochs: 20
