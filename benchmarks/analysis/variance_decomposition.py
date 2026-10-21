@@ -1,18 +1,18 @@
-"""Variance decomposition of AUROC into extractor, detector and preprocessing effects (review item R3).
+"""Variance decomposition of AUROC into extractor, detector and preprocessing effects (review items R3/RR3).
 
-For each dataset the unit of analysis is one cell = extractor x detector x preprocessing, with the AUROC
-averaged over seeds (the private dataset only has seed means, in its report's extractor x detector table;
-PALM uses its test split from results.csv, averaged the same way). Only the feature pipelines enter: 13
-distinct extractors (the RETFound mirror is dropped), 12 trained detectors, 2 preprocessings. Text-prompt
-detectors and Anomalib models are not crossed with the other factors and are left out.
+For each dataset the unit of analysis is one cell = extractor x detector x preprocessing, with the test AUROC
+averaged over seeds (results.csv of each benchmark). Only the feature pipelines enter: 13 distinct extractors
+(the RETFound mirror is dropped), 12 trained detectors, 2 preprocessings. Text-prompt detectors and Anomalib
+models are not crossed with the other factors and are left out.
 
-Reported per dataset:
-  * eta^2 (share of the total sum of squares) of each factor and interaction in a balanced factorial
-    model: extractor, detector, preprocessing, extractor x preprocessing, detector x preprocessing, and the
-    residual (extractor x detector and the three-way interaction, which have one cell each);
-  * the same within each preprocessing (two-way: extractor, detector, residual = extractor x detector);
-  * each analysis with and without RETFound CFP, the weakest extractor;
-  * 95% intervals from a two-way bootstrap that resamples extractors and detectors with replacement.
+Reported per dataset, on the AUROC scale and on the logit scale:
+  * eta^2 (share of the total sum of squares) of each factor in a balanced factorial model: extractor, detector,
+    preprocessing, extractor x preprocessing, detector x preprocessing, and the residual (extractor x detector
+    and the three-way interaction, which have one cell each); and the same within each preprocessing;
+  * the difference eta^2(extractor) - eta^2(detector) with a paired bootstrap interval and the bootstrap
+    probability that it is positive;
+  * each analysis with and without RETFound CFP, the weakest extractor.
+Intervals come from a two-way bootstrap that resamples extractors and detectors with replacement.
 
 Usage:
     python benchmarks/analysis/variance_decomposition.py [--boot 2000] [--out benchmarks/analysis/variance_decomposition.md]
@@ -27,10 +27,12 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-PALM_CSV = ROOT / "benchmarks/palm/report/results.csv"
-PRIVATE_REPORT = ROOT / "benchmarks/ophtalmology/report.md"
+DATASETS = {
+    "Private dataset": (ROOT / "benchmarks/ophtalmology/results.csv", "miopia"),
+    "PALM": (ROOT / "benchmarks/palm/report/results.csv", "palm-test"),
+}
 
-# Report/CSV identifiers -> names used in the paper
+# Benchmark identifiers -> names used in the paper
 EXTRACTORS = {
     "retizero-clip": "RetiZero-CLIP",
     "vit_large_patch16_224[cls]": "RetiZero (image)",
@@ -46,92 +48,37 @@ EXTRACTORS = {
     "flair-clip": "FLAIR-CLIP",
     "hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224": "BiomedCLIP",
 }
-MIRROR = "hf-hub:bitfount/RETFound_MAE[mean]"
 WEAKEST = "RETFound CFP"
+PREPS = ["l2", "l2+pca:0.95"]
+COMPONENTS = ["extractor", "detector", "preprocessing", "extractor x preprocessing",
+              "detector x preprocessing", "residual (extractor x detector, 3-way)"]
 
 
 def detector_name(d: str) -> str:
     return "ensemble" if d.startswith("ensemble") else d
 
 
-def load_palm() -> pd.DataFrame:
-    df = pd.read_csv(PALM_CSV)
-    df = df[(df["error"].isna() | (df["error"].astype(str) == ""))]
-    df = df[df["dataset"].str.endswith("palm-test") & df["extractor"].isin(EXTRACTORS)]
+def load(csv: Path, split: str) -> pd.DataFrame:
+    df = pd.read_csv(csv)
+    df = df[df["error"].isna() | (df["error"].astype(str) == "")]
+    df = df[df["dataset"].astype(str).str.split("/").str[-1].eq(split) & df["extractor"].isin(EXTRACTORS)]
     df = df[~df["detector"].str.startswith("zero_shot")]
     df = df.assign(extractor=df["extractor"].map(EXTRACTORS), detector=df["detector"].map(detector_name))
     return df.groupby(["extractor", "detector", "preprocessing"], as_index=False)["auroc"].mean()
 
 
-def load_private() -> pd.DataFrame:
-    """Parse the 'Mean AUROC: extractor x detector' table of the private dataset's report."""
-    lines = PRIVATE_REPORT.read_text().splitlines()
-    start = next(i for i, l in enumerate(lines) if l.startswith("| Detector | vit_small"))
-    header = [c.strip() for c in lines[start].strip("|").split("|")]
-    # column labels look like "vit_base_patch16_224 · cls] l2" or "resnet50  · l2+pca:0.95"
-    labels = {
-        "vit_small_patch14_reg4_dinov2 · mean]": "vit_small_patch14_reg4_dinov2[mean]",
-        "vit_base_patch16_224 · cls]": "vit_base_patch16_224[cls]",
-        "vit_base_patch16_224 · mean]": "vit_base_patch16_224[mean]",
-        "vit_large_patch16_224 · cls]": "vit_large_patch16_224[cls]",
-        "vit_large_patch16_224 · mean]": "vit_large_patch16_224[mean]",
-        "RETFound_MAE · mean]": MIRROR,
-        "resnet50  ·": "resnet50",
-        "flair-clip  ·": "flair-clip",
-        "retizero-clip  ·": "retizero-clip",
-        "BiomedCLIP-PubMedBERT_256-vit_base_patch16_224  ·": "hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224",
-        "dinov2-base  ·": "facebook/dinov2-base",
-        "siglip2-base-patch16-224  ·": "google/siglip2-base-patch16-224",
-        "medsiglip-448  ·": "google/medsiglip-448",
-        "dinov3-vitb16-pretrain-lvd1689m  ·": "facebook/dinov3-vitb16-pretrain-lvd1689m",
-    }
-    cols = []
-    for h in header[1:]:
-        prep = "l2+pca:0.95" if h.endswith("l2+pca:0.95") else "l2"
-        stem = h[: -len(prep)].rstrip()
-        key = next(v for k, v in labels.items() if stem == k.rstrip() or stem == k)
-        cols.append((key, prep))
-    rows = []
-    for l in lines[start + 2:]:
-        if not l.startswith("|"):
-            break
-        cells = [c.strip().strip("*") for c in l.strip("|").split("|")]
-        det = cells[0]
-        if det in ("mean", "") or det.startswith("zero_shot"):
-            continue
-        for (ext, prep), v in zip(cols, cells[1:]):
-            if ext in EXTRACTORS and v not in ("–", ""):
-                rows.append((EXTRACTORS[ext], detector_name(det), prep, float(v)))
-    return pd.DataFrame(rows, columns=["extractor", "detector", "preprocessing", "auroc"])
+def to_array(d: pd.DataFrame, preps) -> tuple:
+    exts, dets = sorted(d["extractor"].unique()), sorted(d["detector"].unique())
+    y = (d.set_index(["extractor", "detector", "preprocessing"])["auroc"]
+         .reindex(pd.MultiIndex.from_product([exts, dets, preps])).to_numpy()
+         .reshape(len(exts), len(dets), len(preps)))
+    if np.isnan(y).any():
+        raise ValueError("unbalanced design: missing cells")
+    return y, exts, dets
 
 
-def eta_squared(d: pd.DataFrame, by_prep: bool) -> dict:
-    """Shares of the total sum of squares in a balanced factorial design (one value per cell)."""
-    y = d["auroc"].to_numpy()
-    gm = y.mean()
-    sst = ((y - gm) ** 2).sum()
-
-    def ss(cols):
-        m = d.groupby(cols)["auroc"].transform("mean").to_numpy()
-        return ((m - gm) ** 2).sum()
-
-    out = {"extractor": ss(["extractor"]), "detector": ss(["detector"])}
-    if by_prep:
-        out["preprocessing"] = ss(["preprocessing"])
-        out["extractor x preprocessing"] = ss(["extractor", "preprocessing"]) - out["extractor"] - out["preprocessing"]
-        out["detector x preprocessing"] = ss(["detector", "preprocessing"]) - out["detector"] - out["preprocessing"]
-    out["residual (extractor x detector, 3-way)"] = sst - sum(out.values())
-    return {k: v / sst for k, v in out.items()}
-
-
-def ranges(d: pd.DataFrame) -> tuple:
-    """The paper's original range-based effects, computed within one preprocessing."""
-    p = d.pivot_table(index="detector", columns="extractor", values="auroc")
-    return (p.max() - p.min()).mean(), (p.max(axis=1) - p.min(axis=1)).mean()
-
-
-def eta_squared_array(y: np.ndarray) -> dict:
-    """eta^2 for a full array y[extractor, detector, preprocessing] (same components as eta_squared)."""
+def eta_squared(y: np.ndarray) -> dict:
+    """eta^2 for a full array y[extractor, detector, preprocessing]."""
     gm = y.mean()
     sst = ((y - gm) ** 2).sum()
     n_e, n_d, n_p = y.shape
@@ -145,59 +92,64 @@ def eta_squared_array(y: np.ndarray) -> dict:
     return {k: v / sst for k, v in out.items()}
 
 
-def bootstrap(d: pd.DataFrame, by_prep: bool, n: int, rng) -> pd.DataFrame:
-    """Two-way bootstrap: resample extractors and detectors with replacement (duplicates are distinct levels)."""
-    preps = sorted(d["preprocessing"].unique()) if by_prep else [d["preprocessing"].iloc[0]]
-    exts, dets = sorted(d["extractor"].unique()), sorted(d["detector"].unique())
-    y = (d.set_index(["extractor", "detector", "preprocessing"])["auroc"]
-         .reindex(pd.MultiIndex.from_product([exts, dets, preps])).to_numpy().reshape(len(exts), len(dets), len(preps)))
+def bootstrap(y: np.ndarray, n: int, rng) -> pd.DataFrame:
     res = []
     for _ in range(n):
-        e = rng.integers(0, len(exts), len(exts))
-        k = rng.integers(0, len(dets), len(dets))
-        res.append(eta_squared_array(y[np.ix_(e, k, np.arange(len(preps)))]))
+        e = rng.integers(0, y.shape[0], y.shape[0])
+        k = rng.integers(0, y.shape[1], y.shape[1])
+        res.append(eta_squared(y[np.ix_(e, k, np.arange(y.shape[2]))]))
     return pd.DataFrame(res)
 
 
-def analyse(name: str, d: pd.DataFrame, n_boot: int, rng) -> list:
-    blocks = []
-    for label, sub in [("all extractors", d), (f"without {WEAKEST}", d[d["extractor"] != WEAKEST])]:
-        n_e, n_d = sub["extractor"].nunique(), sub["detector"].nunique()
-        rows = []
-        for scope, part, by_prep in [("both preprocessings", sub, True),
-                                     ("L2 only", sub[sub["preprocessing"] == "l2"], False),
-                                     ("L2 + PCA only", sub[sub["preprocessing"] == "l2+pca:0.95"], False)]:
-            est = eta_squared(part, by_prep)
-            boot = bootstrap(part, by_prep, n_boot, rng) if n_boot else None
-            for k, v in est.items():
-                lo, hi = (boot[k].quantile(0.025), boot[k].quantile(0.975)) if boot is not None else (np.nan, np.nan)
-                rows.append((scope, k, v, lo, hi))
-            if not by_prep:
-                de, ee = ranges(part)
-                rows.append((scope, "range effect: detector / extractor (paper's original measure)", de, ee, np.nan))
-        blocks.append((f"{name}, {label} ({n_e} extractors x {n_d} detectors)", rows))
-    return blocks
+def logit(p):
+    p = np.clip(p, 1e-4, 1 - 1e-4)
+    return np.log(p / (1 - p))
+
+
+def analyse(d: pd.DataFrame, n_boot: int, rng) -> list:
+    """Rows: (subset, scale, scope, component, estimate, lo, hi, p_positive)."""
+    rows = []
+    for subset, sub in [("all 13 extractors", d), (f"without {WEAKEST}", d[d["extractor"] != WEAKEST])]:
+        for scale, f in [("AUROC", lambda v: v), ("logit(AUROC)", logit)]:
+            for scope, preps in [("both preprocessings", PREPS), ("L2 only", ["l2"]), ("L2 + PCA only", ["l2+pca:0.95"])]:
+                y, _, _ = to_array(sub[sub["preprocessing"].isin(preps)], preps)
+                y = f(y)
+                est = eta_squared(y)
+                boot = bootstrap(y, n_boot, rng)
+                for comp in COMPONENTS:
+                    if comp in est:
+                        rows.append((subset, scale, scope, comp, est[comp],
+                                     boot[comp].quantile(0.025), boot[comp].quantile(0.975), np.nan))
+                diff = boot["extractor"] - boot["detector"]
+                rows.append((subset, scale, scope, "eta2(extractor) - eta2(detector)",
+                             est["extractor"] - est["detector"], diff.quantile(0.025), diff.quantile(0.975),
+                             (diff > 0).mean()))
+    return rows
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--boot", type=int, default=2000, help="bootstrap replicates (0 = none)")
+    ap.add_argument("--boot", type=int, default=2000, help="bootstrap replicates")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=Path, default=Path(__file__).with_name("variance_decomposition.md"))
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
-    md = ["# Variance decomposition of AUROC (review item R3)", "",
-          "Share of the total sum of squares (eta^2) over extractor x detector x preprocessing cells, AUROC averaged "
-          f"over seeds. 95% intervals: two-way bootstrap over extractors and detectors ({a.boot} replicates).", ""]
-    for name, d in [("Private dataset (test set)", load_private()), ("PALM (test set)", load_palm())]:
-        for title, rows in analyse(name, d, a.boot, rng):
-            md += [f"## {title}", "", "| Scope | Component | eta^2 / value | 95% interval |", "| --- | --- | ---: | ---: |"]
-            for scope, comp, v, lo, hi in rows:
-                if comp.startswith("range"):
-                    md.append(f"| {scope} | range effect, detector / extractor | {v:.3f} / {lo:.3f} | |")
-                else:
-                    md.append(f"| {scope} | {comp} | {v:.3f} | {lo:.3f}–{hi:.3f} |")
-            md.append("")
+    md = ["# Variance decomposition of AUROC (review items R3 and RR3)", "",
+          "Share of the total sum of squares (eta^2) over extractor x detector x preprocessing cells of test AUROC "
+          f"averaged over seeds, from each benchmark's results.csv. 95% intervals: two-way bootstrap over extractors "
+          f"and detectors ({a.boot} replicates, seed {a.seed}). P(>0): bootstrap probability that the extractor "
+          "explains more than the detector.", ""]
+    for name, (csv, split) in DATASETS.items():
+        rows = analyse(load(csv, split), a.boot, rng)
+        for subset in dict.fromkeys(r[0] for r in rows):
+            for scale in ("AUROC", "logit(AUROC)"):
+                md += [f"## {name}, {subset}, {scale} scale", "",
+                       "| Scope | Component | eta^2 | 95% interval | P(>0) |", "| --- | --- | ---: | ---: | ---: |"]
+                for s, sc, scope, comp, v, lo, hi, p in rows:
+                    if s == subset and sc == scale:
+                        pp = "" if np.isnan(p) else f"{p:.2f}"
+                        md.append(f"| {scope} | {comp} | {v:.3f} | {lo:.3f} to {hi:.3f} | {pp} |")
+                md.append("")
     text = "\n".join(md)
     a.out.write_text(text)
     print(text)
