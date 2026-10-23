@@ -1,0 +1,92 @@
+# One-class benchmark on BenchReAD's fundus setting (Lian et al., MICCAI 2025; github.com/DopamineLcy/BenchReAD):
+# the same grid of feature pipelines as configs/palm_benchmark.yaml, run under BenchReAD's one-class protocol.
+# The Anomalib models are in configs/benchread_anomalib.yaml (they need a training subsample, see there).
+#
+# 1. Download EDDFS, BRSET (PhysioNet, credentialed), RIADD/RFMiD and JSIEC (see benchmarks/benchread/README.md),
+#    then rebuild BenchReAD's splits in the MVTec layout:
+#      python benchmarks/benchread/prepare_benchread.py --eddfs /data/EDDFS --brset /data/brset/1.0.1 \
+#        --riadd /data/RIADD --jsiec /data/JSIEC --out /data/benchread_imgad
+# 2. Set data.root below to the --out folder and run:
+#      imgad benchmark --config configs/benchread_benchmark.yaml --out benchmarks/benchread/results.csv \
+#        --scores-out benchmarks/benchread/scores.joblib --report benchmarks/benchread/report --stats \
+#        -j 8 --devices auto --hf-token-file token
+# 3. Choose the configuration on BenchReAD's validation set, report it on RIADD and JSIEC, and compare with the
+#    published numbers:
+#      python benchmarks/benchread/compare_benchread.py benchmarks/benchread/results.csv \
+#        --scores benchmarks/benchread/scores.joblib --data /data/benchread_imgad --out benchmarks/benchread/comparison.md
+#
+# Protocol (BenchReAD's one-class setting): every category is fitted on the same 7,786 labelled normal images
+# (1/3 of the normals of EDDFS and BRSET, BenchReAD's seed-0 split). Normal = no disease label; anomalous = the
+# retained diseases. benchread-val holds BenchReAD's validation set (100 normal + 100 anomalous, EDDFS + BRSET), used
+# only to choose the configuration; benchread-riadd and benchread-jsiec are the two external test sets, with one
+# test folder per anomaly category (seen and unseen). The decision threshold is calibrated on held-out normal scores
+# only (no anomalies), as everywhere in imgad.
+
+data:
+  type: mvtec
+  root: /path/to/benchread_imgad
+  categories: [benchread-val, benchread-riadd, benchread-jsiec]
+
+cache_dir: .feature_cache
+
+seeds: [0, 1, 2]
+# BenchReAD's one-class methods use all labelled normals; seeds then vary the stochastic detectors and the
+# held-out calibration split, not the training set.
+train_subsample: null
+bootstrap: 1000
+ci_alpha: 0.05
+on_error: continue
+
+extractors:
+  - zoo:retfound-green
+  - zoo:visionfm-fundus
+  - zoo:flair
+  - zoo:urfound
+  - zoo:retizero
+  - zoo:retfound-cfp-mirror
+  - zoo:flair-clip
+  - zoo:retizero-clip
+  - zoo:biomedclip
+  - zoo:dinov2-base
+  - zoo:siglip2-base
+  - zoo:retfound-cfp
+  - zoo:retfound-dinov2
+  - zoo:medsiglip
+  - zoo:dinov3-vitb16
+
+preprocessing:
+  - [l2]
+  - [l2, pca:0.95]
+
+detectors:
+  - {name: knn, k: 1}
+  - {name: knn, k: 5}
+  - mahalanobis
+  - centroid
+  - {name: kmeans, n_clusters: 8}
+  - lof
+  - gmm
+  - kde
+  - ocsvm
+  - iforest
+  - pca
+  - name: ensemble
+    members: [{name: knn, k: 1}, mahalanobis]
+  # Text prompts (vision-language extractors only): generic fundus prompts combined with the 1-NN visual score,
+  # as in the PALM and myopia benchmarks.
+  - {name: zero_shot, modality: fundus}
+  # Prompts naming the diseases of BenchReAD's training set (DR, AMD, glaucoma, myopia), text only: true zero-shot,
+  # the training images are not used. Unseen test categories are not named, so they stay unseen.
+  - name: zero_shot
+    modality: fundus
+    mode: text
+    normal: [a healthy retina, a normal fundus, a normal fundus photograph]
+    anomalous: [diabetic retinopathy, age-related macular degeneration, drusen, glaucoma, glaucomatous optic disc cupping,
+                pathologic myopia, myopic maculopathy]
+  # The same prompts combined with the 1-NN visual score.
+  - name: zero_shot
+    modality: fundus
+    mode: both
+    normal: [a healthy retina, a normal fundus, a normal fundus photograph]
+    anomalous: [diabetic retinopathy, age-related macular degeneration, drusen, glaucoma, glaucomatous optic disc cupping,
+                pathologic myopia, myopic maculopathy]
