@@ -1,0 +1,50 @@
+# Anomalib models of configs/palm_benchmark.yaml on BenchReAD's fundus one-class setting (see
+# configs/benchread_benchmark.yaml for the protocol and the data preparation).
+#
+# BenchReAD's one-class training set has 7,786 normal images. Memory-bank models (PatchCore, PaDiM, AnomalyDINO...)
+# keep every training patch in memory before subsampling it: at 256 px that is ~8 million WideResNet-50 patches
+# (~50 GB), more than a single workstation holds. Here every model is therefore trained on a random subset of
+# 1,000 normal images per seed (a different subset per seed). This is a difference from BenchReAD, whose PatchCore
+# training set size is not stated (its NFM memory bank uses 50 images). Raise train_subsample if you have the memory.
+#
+#   imgad benchmark --config configs/benchread_anomalib.yaml --out benchmarks/benchread/results_anomalib.csv \
+#     --scores-out benchmarks/benchread/scores_anomalib.joblib -j 2 --devices auto
+#
+# compare_benchread.py reads both result files (pass both CSVs and both joblib files).
+
+data:
+  type: mvtec
+  root: /path/to/benchread_imgad
+  categories: [benchread-val, benchread-riadd, benchread-jsiec]
+
+seeds: [0, 1, 2]
+train_subsample: 1000
+bootstrap: 1000
+ci_alpha: 0.05
+on_error: continue
+
+extractors: []
+detectors: []
+
+anomalib:
+  - {name: patchcore, image_size: 256}
+  - {name: mhpatchcore, image_size: 256}
+  - {name: padim, image_size: 256}
+  - {name: dfm, image_size: 256}
+  - {name: anomalydino, image_size: 256}
+  - {name: cflow, image_size: 256, max_epochs: 20}
+  - {name: fastflow, image_size: 256, max_epochs: 20}
+  - {name: uflow, image_size: 256, max_epochs: 20}
+  - {name: stfpm, image_size: 256, max_epochs: 20}
+  - {name: reverse_distillation, image_size: 256, max_epochs: 20}
+  - {name: uninet, image_size: 256, max_epochs: 20}
+  - {name: draem, image_size: 256, max_epochs: 20}
+  - {name: supersimplenet, image_size: 256, max_epochs: 20}
+  - {name: glass, image_size: 256, max_epochs: 20}
+  - {name: generalad, image_size: 256, max_epochs: 20}
+  - {name: foundad, image_size: 224, max_epochs: 20}
+  - {name: rad, image_size: 256}
+  - {name: patchflow, image_size: 256, max_epochs: 20}
+  - {name: l2bt, image_size: 224, max_epochs: 20}
+  # BenchReAD's PatchCore setting (224 px, WideResNet-50 layers 2-3, 10% coreset, 1-NN), for a like-for-like row:
+  - {name: patchcore, image_size: 224, coreset_sampling_ratio: 0.1, num_neighbors: 1}
